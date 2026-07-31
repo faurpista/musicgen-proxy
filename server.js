@@ -20,19 +20,18 @@ app.post("/api/generate-audio", async (req,res)=>{
 
 
         const hfResponse = await fetch(
-            "https://router.huggingface.co/fal-ai/musicgen",
-            {
-                method:"POST",
-                headers:{
-                    Authorization:`Bearer ${hfToken}`,
-                    "Content-Type":"application/json"
-                },
-                body:JSON.stringify({
-                    prompt:prompt,
-                    duration:10
-                })
-            }
-        );
+  "https://router.huggingface.co/hf-inference/models/facebook/musicgen-small",
+  {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${hfToken}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      inputs: prompt
+    })
+  }
+);
 
 
         if(!hfResponse.ok){
