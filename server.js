@@ -16,8 +16,10 @@ app.post('/api/generate-audio', async (req, res) => {
 
         console.log("Kérés érkezett a promptra:", prompt);
 
-        // Kérés küldése a HuggingFace API-nak
-        const hfResponse = await fetch("https://api-inference.huggingface.co/models/facebook/musicgen-small", {
+        // 💡 ÚJ, FRISSÍTETT HUGGING FACE ROUTER URL
+        const hfUrl = "https://router.huggingface.co/hf-inference/models/facebook/musicgen-small";
+
+        const hfResponse = await fetch(hfUrl, {
             method: "POST",
             headers: {
                 "Authorization": `Bearer ${hfToken}`,
@@ -26,7 +28,6 @@ app.post('/api/generate-audio', async (req, res) => {
             body: JSON.stringify({ inputs: prompt })
         });
 
-        // Ha a HuggingFace hibát adott vissza (pl. 401 Unauthorized, 503 Model Loading, 404 Not Found)
         if (!hfResponse.ok) {
             const errText = await hfResponse.text();
             console.error(`HuggingFace API hiba (${hfResponse.status}):`, errText);
@@ -36,7 +37,6 @@ app.post('/api/generate-audio', async (req, res) => {
             });
         }
 
-        // Ha minden rendben, az audio választ továbbítjuk
         const arrayBuffer = await hfResponse.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
 
