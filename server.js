@@ -75,7 +75,34 @@ app.post("/api/generate-audio", async (req,res)=>{
     }
 
 });
+app.post("/api/generate-text", async (req, res) => {
+    try {
+        const { prompt } = req.body;
 
+        const response = await fetch(
+            "https://text.pollinations.ai/" +
+            encodeURIComponent(prompt)
+        );
+
+        const text = await response.text();
+
+        if (!response.ok) {
+            return res.status(response.status).json({
+                error: text
+            });
+        }
+
+        res.json({
+            result: text
+        });
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({
+            error: err.message
+        });
+    }
+});
 
 app.listen(
     process.env.PORT || 3000,
