@@ -77,14 +77,26 @@ app.post("/api/generate-audio", async (req,res)=>{
 });
 app.post("/api/generate-text", async (req, res) => {
     try {
+app.post("/api/generate-text", async (req, res) => {
+
+    console.log("=== GENERATE TEXT HÍVÁS ===");
+    console.log("BODY:", req.body);
+
+    try {
         const { prompt } = req.body;
+
+        console.log("Prompt hossz:", prompt?.length);
 
         const response = await fetch(
             "https://text.pollinations.ai/" +
             encodeURIComponent(prompt)
         );
 
+        console.log("Pollinations status:", response.status);
+
         const text = await response.text();
+
+        console.log("Pollinations válasz:", text.substring(0,200));
 
         if (!response.ok) {
             return res.status(response.status).json({
@@ -97,7 +109,8 @@ app.post("/api/generate-text", async (req, res) => {
         });
 
     } catch (err) {
-        console.error(err);
+        console.error("SERVER ERROR:", err);
+
         res.status(500).json({
             error: err.message
         });
