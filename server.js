@@ -76,8 +76,7 @@ app.post("/api/generate-audio", async (req,res)=>{
 
 });
 app.post("/api/generate-text", async (req, res) => {
-    try {
-app.post("/api/generate-text", async (req, res) => {
+ try{
 
     console.log("=== GENERATE TEXT HÍVÁS ===");
     console.log("BODY:", req.body);
