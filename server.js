@@ -16,8 +16,8 @@ app.post('/api/generate-audio', async (req, res) => {
 
         console.log("Kérés érkezett a promptra:", prompt);
 
-        // 💡 ÚJ, FRISSÍTETT HUGGING FACE ROUTER URL
-        const hfUrl = "https://router.huggingface.co/hf-inference/models/facebook/musicgen-small";
+        // 💡 HIVATALOS AUDIO INFERENCE ENDPOINT URL
+        const hfUrl = "https://router.huggingface.co/models/facebook/musicgen-small";
 
         const hfResponse = await fetch(hfUrl, {
             method: "POST",
