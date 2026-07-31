@@ -76,26 +76,40 @@ app.post("/api/generate-audio", async (req,res)=>{
 
 });
 app.post("/api/generate-text", async (req, res) => {
- try{
 
     console.log("=== GENERATE TEXT HÍVÁS ===");
-    console.log("BODY:", req.body);
+    console.log(req.body);
 
     try {
+
         const { prompt } = req.body;
 
-        console.log("Prompt hossz:", prompt?.length);
+        if (!prompt) {
+            return res.status(400).json({
+                error: "Hiányzó prompt"
+            });
+        }
+
 
         const response = await fetch(
             "https://text.pollinations.ai/" +
             encodeURIComponent(prompt)
         );
 
-        console.log("Pollinations status:", response.status);
 
         const text = await response.text();
 
-        console.log("Pollinations válasz:", text.substring(0,200));
+
+        console.log(
+            "Pollinations status:",
+            response.status
+        );
+
+        console.log(
+            "Válasz:",
+            text.substring(0,200)
+        );
+
 
         if (!response.ok) {
             return res.status(response.status).json({
@@ -103,20 +117,33 @@ app.post("/api/generate-text", async (req, res) => {
             });
         }
 
+
         res.json({
             result: text
         });
 
+
     } catch (err) {
-        console.error("SERVER ERROR:", err);
+
+        console.error(
+            "SERVER ERROR:",
+            err
+        );
 
         res.status(500).json({
             error: err.message
         });
     }
+
 });
 
-app.listen(
-    process.env.PORT || 3000,
-    ()=>console.log("Music proxy running")
-);
+
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+    console.log(
+        "Server running on port",
+        PORT
+    );
+});
