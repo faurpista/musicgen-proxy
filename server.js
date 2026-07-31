@@ -81,7 +81,6 @@ app.post("/api/generate-text", async (req, res) => {
     console.log(req.body);
 
     try {
-
         const { prompt } = req.body;
 
         if (!prompt) {
@@ -90,26 +89,16 @@ app.post("/api/generate-text", async (req, res) => {
             });
         }
 
-
         const response = await fetch(
-            "https://text.pollinations.ai/" +
+            "https://gen.pollinations.ai/text/" +
             encodeURIComponent(prompt)
         );
 
+        console.log("Status:", response.status);
 
         const text = await response.text();
 
-
-        console.log(
-            "Pollinations status:",
-            response.status
-        );
-
-        console.log(
-            "Válasz:",
-            text.substring(0,200)
-        );
-
+        console.log("Válasz:", text.substring(0,200));
 
         if (!response.ok) {
             return res.status(response.status).json({
@@ -117,27 +106,18 @@ app.post("/api/generate-text", async (req, res) => {
             });
         }
 
-
         res.json({
             result: text
         });
 
-
-    } catch (err) {
-
-        console.error(
-            "SERVER ERROR:",
-            err
-        );
+    } catch(err) {
+        console.error("SERVER ERROR:", err);
 
         res.status(500).json({
             error: err.message
         });
     }
-
 });
-
-
 
 const PORT = process.env.PORT || 3000;
 
