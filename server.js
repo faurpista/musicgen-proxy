@@ -3,7 +3,6 @@ const cors = require('cors');
 
 const app = express();
 
-// Engedélyezzük a kéréseket a GitHub Pages oldaladról
 app.use(cors());
 app.use(express.json());
 
@@ -12,10 +11,12 @@ app.post('/api/generate-audio', async (req, res) => {
         const { prompt, hfToken } = req.body;
 
         if (!hfToken) {
-            return res.status(400).json({ error: "Hiányzó API token" });
+            return res.status(400).json({ error: "Hiányzó HuggingFace API token!" });
         }
 
-        // A szerver hívja meg a HF-et (Itt NINCS CORS blokkolás!)
+        console.log("Kérés érkezett a promptra:", prompt);
+
+        // Kérés küldése a HuggingFace API-nak
         const hfResponse = await fetch("https://api-inference.huggingface.co/models/facebook/musicgen-small", {
             method: "POST",
             headers: {
@@ -25,12 +26,17 @@ app.post('/api/generate-audio', async (req, res) => {
             body: JSON.stringify({ inputs: prompt })
         });
 
+        // Ha a HuggingFace hibát adott vissza (pl. 401 Unauthorized, 503 Model Loading, 404 Not Found)
         if (!hfResponse.ok) {
             const errText = await hfResponse.text();
-            return res.status(hfResponse.status).send(errText);
+            console.error(`HuggingFace API hiba (${hfResponse.status}):`, errText);
+            
+            return res.status(hfResponse.status).json({
+                error: `HuggingFace hiba (${hfResponse.status}): ${errText}`
+            });
         }
 
-        // Az audio választ továbbítjuk a GitHub Pages frontendnek
+        // Ha minden rendben, az audio választ továbbítjuk
         const arrayBuffer = await hfResponse.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
 
@@ -38,8 +44,8 @@ app.post('/api/generate-audio', async (req, res) => {
         res.send(buffer);
 
     } catch (error) {
-        console.error("Server proxy error:", error);
-        res.status(500).json({ error: error.message });
+        console.error("Szerver belső hiba:", error);
+        res.status(500).json({ error: `Belső szerverhiba: ${error.message}` });
     }
 });
 
