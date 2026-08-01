@@ -14,32 +14,42 @@ app.post("/api/generate-audio", async (req, res) => {
             return res.status(400).json({ error: "Hiányzó prompt" });
         }
 
-        console.log("🎶 Zene generálása a HF Space-en keresztül...");
+        console.log("🎶 Csatlakozás a facebook/MusicGen Space-hez...");
 
-        // Csatlakozás a hivatalos facebook/MusicGen Gradio Space-hez
-        // (A hfToken megadása opció, de segít elkerülni a sűrűség miatti korlátokat)
+        // Csatlakozás a Space-hez
         const client = await Client.connect("facebook/MusicGen", {
             hf_token: hfToken || undefined
         });
 
-        // Modell paramétereinek elküldése
-        const result = await client.predict("/predict", {
-            model: "facebook/musicgen-small",
-            text: prompt,
-            audio: null,        // Nincs referencia audió (text-to-music)
-            duration: 10,       // Hossz másodpercben (pl. 10 mp)
-            top_k: 250,
-            top_p: 0,
-            temperature: 1,
-            cfg_coef: 3
-        });
+        console.log("⏳ Zene generálása folyamatban...");
 
-        // A Gradio az generált fáljt egy URL formájában adja vissza (result.data[0])
+        // A predict hívása tömbös paraméter átadással
+        // [model, text_prompt, audio_input, duration, top_k, top_p, temperature, classifier_free_guidance]
+        const result = await client.predict(0, [
+            "facebook/musicgen-small", // Modell típusa
+            prompt,                     // Szöveges prompt
+            null,                       // Melódia/audió bemenet (text-to-music esetén null)
+            10,                         // Időtartam másodpercben (pl. 10 mp)
+            250,                        // Top-k
+            0,                          // Top-p
+            1,                          // Temperature
+            3                           // CFG scale
+        ]);
+
+        // A generált fájl adatait kiszedjük a válaszból
         const audioData = result.data[0];
-        const audioUrl = audioData.url;
+        
+        // A Gradio 1.x+ klienstől függően az URL lehet audioData.url vagy maga az audioData objektum
+        const fileUrl = audioData?.url || audioData;
 
-        // Audió fájl letöltése és továbbítása a frontend felé
-        const audioResponse = await fetch(audioUrl);
+        if (!fileUrl) {
+            throw new Error("Nem érkezett érvényes audio URL a Gradio Space-ből.");
+        }
+
+        console.log("📥 Audió letöltése innen:", fileUrl);
+
+        // Fájl letöltése és továbbítása a kliensnek
+        const audioResponse = await fetch(fileUrl);
         const buffer = Buffer.from(await audioResponse.arrayBuffer());
 
         res.setHeader("Content-Type", "audio/wav");
