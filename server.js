@@ -6,75 +6,64 @@ const app = express();
 app.use(cors());
 app.use(express.json({limit:"2mb"}));
 
-app.post("/api/generate-audio", async (req,res)=>{
-
+app.post("/api/generate-audio", async (req, res) => {
     try {
+        const { prompt, hfToken } = req.body;
 
-        const {prompt,hfToken}=req.body;
-
-        if(!prompt || !hfToken){
+        if (!prompt || !hfToken) {
             return res.status(400).json({
-                error:"Hiányzó prompt vagy token"
+                error: "Hiányzó prompt vagy token"
             });
         }
 
-
         const hfResponse = await fetch(
-  "https://router.huggingface.co/hf-inference/models/facebook/musicgen-small",
-  {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${hfToken}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      inputs: prompt
-    })
-  }
-);
+            "https://router.huggingface.co/hf-inference/models/facebook/musicgen-small",
+            {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${hfToken}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    inputs: prompt
+                })
+            }
+        );
 
+        if (!hfResponse.ok) {
+            const errorText = await hfResponse.text();
+            console.error("HF ERROR:", hfResponse.status, errorText);
 
-        if(!hfResponse.ok){
+            // Megpróbáljuk JSON-ként feldolgozni a HF hibaüzenetét
+            let parsedError = errorText;
+            try {
+                const jsonErr = JSON.parse(errorText);
+                parsedError = jsonErr.error || errorText;
+            } catch (e) {
+                // Nem JSON formátumú hiba
+            }
 
-            const errorText=await hfResponse.text();
-
-            console.log(
-              "HF ERROR:",
-              hfResponse.status,
-              errorText
-            );
-
-            return res.status(hfResponse.status)
-                .json({
-                    error:errorText
-                });
+            return res.status(hfResponse.status).json({
+                error: `HuggingFace API hiba (${hfResponse.status}): ${parsedError}`
+            });
         }
 
+        // A Hugging Face válaszának Content-Type-ját használjuk (alapértelmezetten audio/wav)
+        const contentType = hfResponse.headers.get("content-type") || "audio/wav";
 
-        const buffer=Buffer.from(
-            await hfResponse.arrayBuffer()
-        );
+        const buffer = Buffer.from(await hfResponse.arrayBuffer());
 
-
-        res.setHeader(
-            "Content-Type",
-            "audio/mpeg"
-        );
-
+        res.setHeader("Content-Type", contentType);
         res.send(buffer);
 
-
-    } catch(err){
-
-        console.error(err);
-
+    } catch (err) {
+        console.error("SERVER ERROR:", err);
         res.status(500).json({
-            error:err.message
+            error: err.message || "Belső szerverhiba történt"
         });
-
     }
-
 });
+
 app.post("/api/generate-text", async (req, res) => {
 
     console.log("=== GENERATE TEXT HÍVÁS ===");
