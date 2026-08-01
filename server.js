@@ -17,9 +17,10 @@ app.post("/api/generate-audio", async (req, res) => {
         console.log("🎶 Csatlakozás a facebook/MusicGen Space-hez...");
 
         // Csatlakozás a Space-hez
-        const client = await Client.connect("facebook/MusicGen", {
-            hf_token: hfToken || undefined
-        });
+        // ÚJ, stabilabb alternatív Space:
+const client = await Client.connect("grandjourney/MusicGen", {
+    hf_token: hfToken || undefined
+});
 
         console.log("⏳ Zene generálása folyamatban...");
 
