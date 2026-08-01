@@ -6,6 +6,39 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
+app.post("/api/p/generate-audio", async (req, res) => {
+    try {
+        const { prompt } = req.body;
+
+        if (!prompt) {
+            return res.status(400).json({ error: "Hiányzó prompt" });
+        }
+
+        console.log("🎶 Zene generálása a Pollinations AI-val...");
+
+        // A Pollinations API közvetlenül legenerálja és visszaadja az audio streamet
+        const audioUrl = `https://gen.pollinations.ai/audio/${encodeURIComponent(prompt)}`;
+
+        const response = await fetch(audioUrl);
+
+        if (!response.ok) {
+            throw new Error(`Pollinations API hiba: ${response.status}`);
+        }
+
+        const buffer = Buffer.from(await response.arrayBuffer());
+
+        // Beállítjuk az audió fejléceket
+        res.setHeader("Content-Type", "audio/mpeg");
+        res.send(buffer);
+
+    } catch (err) {
+        console.error("AUDIO ERROR:", err);
+        res.status(500).json({
+            error: `Zenegenerálási hiba: ${err.message}`
+        });
+    }
+});
+
 app.post("/api/generate-audio", async (req, res) => {
     try {
         const { prompt, hfToken } = req.body;
@@ -18,9 +51,10 @@ app.post("/api/generate-audio", async (req, res) => {
 
         // Csatlakozás a Space-hez
         // ÚJ, stabilabb alternatív Space:
-const client = await Client.connect("grandjourney/MusicGen", {
+const client = await Client.connect("mrfakename/MusicGen-Small", {
     hf_token: hfToken || undefined
 });
+
 
         console.log("⏳ Zene generálása folyamatban...");
 
