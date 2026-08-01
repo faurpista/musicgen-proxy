@@ -1,68 +1,58 @@
 const express = require("express");
 const cors = require("cors");
+const { Client } = require("@gradio/client");
 
 const app = express();
-
 app.use(cors());
-app.use(express.json({limit:"2mb"}));
+app.use(express.json({ limit: "2mb" }));
 
 app.post("/api/generate-audio", async (req, res) => {
     try {
         const { prompt, hfToken } = req.body;
 
-        if (!prompt || !hfToken) {
-            return res.status(400).json({
-                error: "Hiányzó prompt vagy token"
-            });
+        if (!prompt) {
+            return res.status(400).json({ error: "Hiányzó prompt" });
         }
 
-        const hfResponse = await fetch(
-            "https://router.huggingface.co/hf-inference/models/facebook/musicgen-small",
-            {
-                method: "POST",
-                headers: {
-                    "Authorization": `Bearer ${hfToken}`,
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    inputs: prompt
-                })
-            }
-        );
+        console.log("🎶 Zene generálása a HF Space-en keresztül...");
 
-        if (!hfResponse.ok) {
-            const errorText = await hfResponse.text();
-            console.error("HF ERROR:", hfResponse.status, errorText);
+        // Csatlakozás a hivatalos facebook/MusicGen Gradio Space-hez
+        // (A hfToken megadása opció, de segít elkerülni a sűrűség miatti korlátokat)
+        const client = await Client.connect("facebook/MusicGen", {
+            hf_token: hfToken || undefined
+        });
 
-            // Megpróbáljuk JSON-ként feldolgozni a HF hibaüzenetét
-            let parsedError = errorText;
-            try {
-                const jsonErr = JSON.parse(errorText);
-                parsedError = jsonErr.error || errorText;
-            } catch (e) {
-                // Nem JSON formátumú hiba
-            }
+        // Modell paramétereinek elküldése
+        const result = await client.predict("/predict", {
+            model: "facebook/musicgen-small",
+            text: prompt,
+            audio: null,        // Nincs referencia audió (text-to-music)
+            duration: 10,       // Hossz másodpercben (pl. 10 mp)
+            top_k: 250,
+            top_p: 0,
+            temperature: 1,
+            cfg_coef: 3
+        });
 
-            return res.status(hfResponse.status).json({
-                error: `HuggingFace API hiba (${hfResponse.status}): ${parsedError}`
-            });
-        }
+        // A Gradio az generált fáljt egy URL formájában adja vissza (result.data[0])
+        const audioData = result.data[0];
+        const audioUrl = audioData.url;
 
-        // A Hugging Face válaszának Content-Type-ját használjuk (alapértelmezetten audio/wav)
-        const contentType = hfResponse.headers.get("content-type") || "audio/wav";
+        // Audió fájl letöltése és továbbítása a frontend felé
+        const audioResponse = await fetch(audioUrl);
+        const buffer = Buffer.from(await audioResponse.arrayBuffer());
 
-        const buffer = Buffer.from(await hfResponse.arrayBuffer());
-
-        res.setHeader("Content-Type", contentType);
+        res.setHeader("Content-Type", "audio/wav");
         res.send(buffer);
 
     } catch (err) {
-        console.error("SERVER ERROR:", err);
+        console.error("MUSICGEN ERROR:", err);
         res.status(500).json({
-            error: err.message || "Belső szerverhiba történt"
+            error: `Zenegenerálási hiba: ${err.message}`
         });
     }
 });
+
 
 app.post("/api/generate-text", async (req, res) => {
 
