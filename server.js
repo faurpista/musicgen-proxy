@@ -1,99 +1,73 @@
 const express = require("express");
 const cors = require("cors");
-const { Client } = require("@gradio/client");
 
 const app = express();
+
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
 app.post("/api/p/generate-audio", async (req, res) => {
     try {
-        const { prompt } = req.body;
+        const { prompt, apiKey } = req.body;
 
         if (!prompt) {
-            return res.status(400).json({ error: "Hiányzó prompt" });
+            return res.status(400).json({ 
+                error: "Hiányzó prompt" 
+            });
         }
 
-        console.log("🎶 Zene generálása a Pollinations AI-val...");
+        // A DeepInfra API kulcs származhat a kérésből vagy környezeti változóból
+        const deepinfraToken = apiKey || process.env.DEEPINFRA_TOKEN;
 
-        // A Pollinations API közvetlenül legenerálja és visszaadja az audio streamet
-        const audioUrl = `https://gen.pollinations.ai/audio/${encodeURIComponent(prompt)}`;
-
-        const response = await fetch(audioUrl);
-
-        if (!response.ok) {
-            throw new Error(`Pollinations API hiba: ${response.status}`);
+        if (!deepinfraToken) {
+            return res.status(400).json({ 
+                error: "Hiányzó DeepInfra API kulcs!" 
+            });
         }
 
-        const buffer = Buffer.from(await response.arrayBuffer());
+        console.log("🎶 Zene generálása a DeepInfra API-val...");
 
-        // Beállítjuk az audió fejléceket
-        res.setHeader("Content-Type", "audio/mpeg");
-        res.send(buffer);
+        // 1. Kérés küldése a DeepInfra MusicGen modelljének
+        const response = await fetch(
+            "https://api.deepinfra.com/v1/inference/facebook/musicgen-small",
+            {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${deepinfraToken}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    prompt: prompt,
+                    duration: 10 // A zene hossza másodpercben
+                })
+            }
+        );
 
-    } catch (err) {
-        console.error("AUDIO ERROR:", err);
-        res.status(500).json({
-            error: `Zenegenerálási hiba: ${err.message}`
-        });
-    }
-});
+        const data = await response.json();
 
-app.post("/api/generate-audio", async (req, res) => {
-    try {
-        const { prompt, hfToken } = req.body;
-
-        if (!prompt) {
-            return res.status(400).json({ error: "Hiányzó prompt" });
+        if (!response.ok || !data.audio) {
+            console.error("DeepInfra API hiba:", data);
+            return res.status(response.status || 500).json({
+                error: data.detail || data.error || "Generálási hiba a DeepInfra szerverén"
+            });
         }
 
-        console.log("🎶 Csatlakozás a facebook/MusicGen Space-hez...");
+        // 2. Ha a DeepInfra egy audió URL-t ad vissza
+        const audioUrl = data.audio;
+        console.log("📥 Audió letöltése innen:", audioUrl);
 
-        // Csatlakozás a Space-hez
-        // ÚJ, stabilabb alternatív Space:
-const client = await Client.connect("mrfakename/MusicGen-Small", {
-    hf_token: hfToken || undefined
-});
-
-
-        console.log("⏳ Zene generálása folyamatban...");
-
-        // A predict hívása tömbös paraméter átadással
-        // [model, text_prompt, audio_input, duration, top_k, top_p, temperature, classifier_free_guidance]
-        const result = await client.predict(0, [
-            "facebook/musicgen-small", // Modell típusa
-            prompt,                     // Szöveges prompt
-            null,                       // Melódia/audió bemenet (text-to-music esetén null)
-            10,                         // Időtartam másodpercben (pl. 10 mp)
-            250,                        // Top-k
-            0,                          // Top-p
-            1,                          // Temperature
-            3                           // CFG scale
-        ]);
-
-        // A generált fájl adatait kiszedjük a válaszból
-        const audioData = result.data[0];
-        
-        // A Gradio 1.x+ klienstől függően az URL lehet audioData.url vagy maga az audioData objektum
-        const fileUrl = audioData?.url || audioData;
-
-        if (!fileUrl) {
-            throw new Error("Nem érkezett érvényes audio URL a Gradio Space-ből.");
-        }
-
-        console.log("📥 Audió letöltése innen:", fileUrl);
-
-        // Fájl letöltése és továbbítása a kliensnek
-        const audioResponse = await fetch(fileUrl);
+        // Letöltjük az elkészült hangfájlt
+        const audioResponse = await fetch(audioUrl);
         const buffer = Buffer.from(await audioResponse.arrayBuffer());
 
+        // 3. Bináris audió válasz továbbítása a kliensnek
         res.setHeader("Content-Type", "audio/wav");
         res.send(buffer);
 
     } catch (err) {
-        console.error("MUSICGEN ERROR:", err);
+        console.error("SERVER ERROR:", err);
         res.status(500).json({
-            error: `Zenegenerálási hiba: ${err.message}`
+            error: `Szerver hiba: ${err.message}`
         });
     }
 });
