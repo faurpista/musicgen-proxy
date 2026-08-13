@@ -21,8 +21,7 @@ app.post("/api/generate-audio", async (req, res) => {
         }
 
         // Hugging Face API Token (hf_...)
-        const hfToken = apiKey || process.env.HF_TOKEN;
-
+        const hfToken = tokenFromClient || apiKey || process.env.HF_TOKEN;
         if (!hfToken) {
             console.error("❌ Hiba: Hiányzó HF_TOKEN!");
             return res.status(400).json({ error: "Hiányzó Hugging Face API kulcs!" });
