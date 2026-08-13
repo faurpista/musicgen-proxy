@@ -30,9 +30,9 @@ app.post("/api/generate-audio", async (req, res) => {
         console.log(`🎶 Zene generálása a Hugging Face-en: "${prompt}"...`);
 
         // Hugging Face Inference API kérés
-        const response = await fetch(
-            "https://api-inference.huggingface.co/models/facebook/musicgen-small",
-            {
+        const MODEL_NAME = "facebook/musicgen-small"; // vagy musicgen-medium / musicgen-large
+
+const response = await fetch(`https://api-inference.huggingface.co/models/${MODEL_NAME}`, {
                 method: "POST",
                 headers: {
                     "Authorization": `Bearer ${hfToken}`,
