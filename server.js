@@ -13,7 +13,7 @@ app.post("/api/generate-audio", async (req, res) => {
     console.log("=== GENERATE AUDIO HÍVÁS (Hugging Face) ===");
 
     try {
-        const { prompt, apiKey } = req.body;
+        const { prompt, apiKey, hfToken: tokenFromClient } = req.body;
 
         if (!prompt) {
             console.error("❌ Hiba: Hiányzó prompt!");
