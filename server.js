@@ -9,7 +9,7 @@ app.use(express.json({ limit: "5mb" })); // Növelt limit a biztonság kedvéér
 // ==========================================
 // 1. ZENE GENERÁLÁS (DeepInfra MusicGen)
 // ==========================================
-app.post("/api/p/generate-audio", async (req, res) => {
+app.post("/api/generate-audio", async (req, res) => {
     try {
         const { prompt, apiKey } = req.body;
 
