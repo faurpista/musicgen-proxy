@@ -4,83 +4,73 @@ const cors = require("cors");
 const app = express();
 
 app.use(cors());
-app.use(express.json({ limit: "5mb" })); // Növelt limit a biztonság kedvéért
+app.use(express.json({ limit: "5mb" }));
 
 // ==========================================
-// 1. ZENE GENERÁLÁS (DeepInfra MusicGen)
+// 1. ZENE GENERÁLÁS (Hugging Face API)
 // ==========================================
 app.post("/api/generate-audio", async (req, res) => {
+    console.log("=== GENERATE AUDIO HÍVÁS (Hugging Face) ===");
+
     try {
         const { prompt, apiKey } = req.body;
 
         if (!prompt) {
+            console.error("❌ Hiba: Hiányzó prompt!");
             return res.status(400).json({ error: "Hiányzó prompt" });
         }
 
-        const deepinfraToken = apiKey || process.env.DEEPINFRA_TOKEN;
+        // Hugging Face API Token (hf_...)
+        const hfToken = apiKey || process.env.HF_TOKEN;
 
-        if (!deepinfraToken) {
-            return res.status(400).json({ 
-                error: "Hiányzó DeepInfra API kulcs!" 
-            });
+        if (!hfToken) {
+            console.error("❌ Hiba: Hiányzó HF_TOKEN!");
+            return res.status(400).json({ error: "Hiányzó Hugging Face API kulcs!" });
         }
 
-        console.log("🎶 Zene generálása a DeepInfra API-val...");
+        console.log(`🎶 Zene generálása a Hugging Face-en: "${prompt}"...`);
 
+        // Hugging Face Inference API kérés
         const response = await fetch(
-            "https://api.deepinfra.com/v1/inference/facebook/musicgen-small",
+            "https://api-inference.huggingface.co/models/facebook/musicgen-small",
             {
                 method: "POST",
                 headers: {
-                    "Authorization": `Bearer ${deepinfraToken}`,
+                    "Authorization": `Bearer ${hfToken}`,
                     "Content-Type": "application/json"
                 },
                 body: JSON.stringify({
-                    prompt: prompt,
-                    duration: 10 // A zene hossza másodpercben
+                    inputs: prompt, // FONTOS: Hugging Face-nél 'inputs' kell, nem 'prompt'!
+                    options: {
+                        wait_for_model: true // Megvárja, amíg a HF betölti a modellt a memóriába
+                    }
                 })
             }
         );
 
-        const data = await response.json();
-
-        if (!response.ok || !data.audio) {
-            console.error("DeepInfra API hiba:", data);
-            return res.status(response.status || 500).json({
-                error: data.detail || data.error || "Generálási hiba a DeepInfra szerverén"
+        // Ha a Hugging Face hibát dob (pl. rossz API kulcs, hiányzó paraméter)
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error("❌ Hugging Face API hiba:", response.status, errorText);
+            return res.status(response.status).json({
+                error: `Hugging Face Hiba (${response.status}): ${errorText}`
             });
         }
 
-        let buffer;
-        const audioData = data.audio;
+        // A Hugging Face közvetlenül az audio/wav bináris adatát adja vissza
+        const arrayBuffer = await response.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
 
-        // FONTOS: Megnézzük, hogy Data URI-t, HTTP URL-t vagy nyers Base64-et kaptunk
-        if (typeof audioData === "string" && audioData.startsWith("data:")) {
-            // Data URI pl: "data:audio/wav;base64,UklGR..."
-            console.log("📦 Data URI érzékelve, átalakítás Buffer-ré...");
-            const base64String = audioData.split(",")[1];
-            buffer = Buffer.from(base64String, "base64");
-        } else if (typeof audioData === "string" && audioData.startsWith("http")) {
-            // Sima letölthető HTTP URL
-            console.log("📥 Audió letöltése innen:", audioData);
-            const audioResponse = await fetch(audioData);
-            buffer = Buffer.from(await audioResponse.arrayBuffer());
-        } else {
-            // Nyers Base64 string
-            console.log("📦 Nyers Base64 érzékelve...");
-            buffer = Buffer.from(audioData, "base64");
-        }
+        console.log(`✅ Zene sikeresen legyártva! Méret: ${buffer.length} bájt`);
 
-        // Bináris audió válasz küldése
+        // Válasz visszaküldése a kliensnek
         res.setHeader("Content-Type", "audio/wav");
         res.setHeader("Content-Length", buffer.length);
         res.send(buffer);
 
     } catch (err) {
-        console.error("SERVER ERROR:", err);
-        res.status(500).json({
-            error: `Szerver hiba: ${err.message}`
-        });
+        console.error("❌ SERVER EXCEPTION:", err);
+        res.status(500).json({ error: `Szerver hiba: ${err.message}` });
     }
 });
 
@@ -89,8 +79,6 @@ app.post("/api/generate-audio", async (req, res) => {
 // 2. SZÖVEG GENERÁLÁS (Pollinations AI)
 // ==========================================
 app.post("/api/generate-text", async (req, res) => {
-    console.log("=== GENERATE TEXT HÍVÁS ===");
-
     try {
         const { prompt } = req.body;
 
@@ -98,18 +86,9 @@ app.post("/api/generate-text", async (req, res) => {
             return res.status(400).json({ error: "Hiányzó prompt" });
         }
 
-        // Stabilitási javítás: POST kérést küldünk a Pollinations szöveg API-jára
-        const response = await fetch("https://text.pollinations.ai/", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                messages: [
-                    { role: "user", content: prompt }
-                ]
-            })
-        });
+        const response = await fetch(
+            `https://text.pollinations.ai/${encodeURIComponent(prompt)}`
+        );
 
         const text = await response.text();
 
@@ -120,7 +99,7 @@ app.post("/api/generate-text", async (req, res) => {
         res.json({ result: text });
 
     } catch (err) {
-        console.error("SERVER ERROR:", err);
+        console.error("❌ SERVER EXCEPTION:", err);
         res.status(500).json({ error: err.message });
     }
 });
