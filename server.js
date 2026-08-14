@@ -399,6 +399,205 @@ app.post("/api/test-ace", async (req, res) => {
         });
     }
 });
+
+// ==========================================
+// TESZT 1 - HUGGING FACE MUSICGEN
+// ==========================================
+app.post("/api/test-musicgen", async (req, res) => {
+    console.log("=== TESZT 1: MUSICGEN ===");
+
+    try {
+        const { prompt, hfToken } = req.body;
+
+        if (!prompt) {
+            return res.status(400).json({
+                error: "Hiányzó prompt"
+            });
+        }
+
+        const token = hfToken || process.env.HF_TOKEN;
+
+        if (!token) {
+            return res.status(400).json({
+                error: "Hiányzó HF_TOKEN"
+            });
+        }
+
+        const MODEL = "facebook/musicgen-small";
+
+        // A jelenlegi HF router
+        const url =
+            `https://router.huggingface.co/hf-inference/models/${MODEL}`;
+
+        console.log("➡️ URL:", url);
+        console.log("🎵 Prompt:", prompt);
+
+        const response = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${token}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                inputs: prompt
+            })
+        });
+
+        const contentType =
+            response.headers.get("content-type") || "";
+
+        console.log("⬅️ Status:", response.status);
+        console.log("⬅️ Content-Type:", contentType);
+
+        if (!response.ok) {
+            const errorText = await response.text();
+
+            console.error(
+                "❌ MusicGen HF hiba:",
+                errorText
+            );
+
+            return res.status(response.status).json({
+                success: false,
+                test: "musicgen",
+                status: response.status,
+                error: errorText
+            });
+        }
+
+        const buffer = Buffer.from(
+            await response.arrayBuffer()
+        );
+
+        console.log(
+            `✅ MusicGen válasz: ${buffer.length} byte`
+        );
+
+        res.setHeader(
+            "Content-Type",
+            contentType || "audio/wav"
+        );
+
+        res.setHeader(
+            "Content-Length",
+            buffer.length
+        );
+
+        res.send(buffer);
+
+    } catch (err) {
+        console.error(
+            "❌ MusicGen exception:",
+            err
+        );
+
+        res.status(500).json({
+            success: false,
+            test: "musicgen",
+            error: err.message
+        });
+    }
+});
+
+// ==========================================
+// TESZT 2 - STABLE AUDIO OPEN
+// ==========================================
+app.post("/api/test-stable-audio", async (req, res) => {
+    console.log("=== TESZT 2: STABLE AUDIO OPEN ===");
+
+    try {
+        const { prompt, hfToken } = req.body;
+
+        if (!prompt) {
+            return res.status(400).json({
+                error: "Hiányzó prompt"
+            });
+        }
+
+        const token = hfToken || process.env.HF_TOKEN;
+
+        if (!token) {
+            return res.status(400).json({
+                error: "Hiányzó HF_TOKEN"
+            });
+        }
+
+        const MODEL =
+            "stabilityai/stable-audio-open-1.0";
+
+        const url =
+            `https://router.huggingface.co/hf-inference/models/${MODEL}`;
+
+        console.log("➡️ URL:", url);
+        console.log("🎵 Prompt:", prompt);
+
+        const response = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${token}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                inputs: prompt
+            })
+        });
+
+        const contentType =
+            response.headers.get("content-type") || "";
+
+        console.log("⬅️ Status:", response.status);
+        console.log("⬅️ Content-Type:", contentType);
+
+        if (!response.ok) {
+            const errorText = await response.text();
+
+            console.error(
+                "❌ Stable Audio HF hiba:",
+                errorText
+            );
+
+            return res.status(response.status).json({
+                success: false,
+                test: "stable-audio",
+                status: response.status,
+                error: errorText
+            });
+        }
+
+        const buffer = Buffer.from(
+            await response.arrayBuffer()
+        );
+
+        console.log(
+            `✅ Stable Audio válasz: ${buffer.length} byte`
+        );
+
+        res.setHeader(
+            "Content-Type",
+            contentType || "audio/wav"
+        );
+
+        res.setHeader(
+            "Content-Length",
+            buffer.length
+        );
+
+        res.send(buffer);
+
+    } catch (err) {
+        console.error(
+            "❌ Stable Audio exception:",
+            err
+        );
+
+        res.status(500).json({
+            success: false,
+            test: "stable-audio",
+            error: err.message
+        });
+    }
+});
+
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
