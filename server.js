@@ -129,11 +129,40 @@ app.post("/api/generate-free-audio", async (req, res) => {
                 error: "Hiányzó prompt."
             });
         }
+        // 1. Feladat indítása
+        const { 
+            prompt, 
+            hfToken: tokenFromClient, 
+            apiKey, 
+            duration,  // ⏱️ ÚJ: Hossz másodpercben
+            lyrics     // 🎤 ÚJ: Dalszöveg (ha van)
+        } = req.body || {};
 
-        console.log(`🎵 Prompt: "${prompt}"`);
+        const hfToken = tokenFromClient || apiKey || process.env.HF_TOKEN;
+
+        if (!hfToken) {
+            return res.status(401).json({ success: false, error: "Hiányzó Hugging Face API token." });
+        }
+
+        if (!prompt) {
+            return res.status(400).json({ success: false, error: "Hiányzó prompt." });
+        }
+
+        // Hossz beállítása (ha a kliens nem küldi, alapértelmezett 10 mp)
+        const audioDuration = parseInt(duration) || 10;
+
+        // Ha van dalszöveg, hozzáfűzzük a prompt kéréshez
+        let finalPrompt = prompt;
+        if (lyrics && lyrics.trim() !== "") {
+            finalPrompt = `${prompt}\n\n${lyrics.trim()}`;
+        }
+
+        console.log(`🎵 Prompt: "${finalPrompt}"`);
+        console.log(`⏱️ Időtartam: ${audioDuration} mp`);
+
         const SPACE = "https://victor-ace-step-jam.hf.space";
 
-        // 1. Feladat indítása
+        // 1. Feladat indítása a dinamikus adatokkal
         const response = await fetch(`${SPACE}/gradio_api/call/create`, {
             method: "POST",
             headers: {
@@ -142,10 +171,10 @@ app.post("/api/generate-free-audio", async (req, res) => {
             },
             body: JSON.stringify({
                 data: [
-                    prompt, // Prompt szöveg
-                    10,     // Időtartam (másodperc)
-                    -1,     // Seed (-1 = random)
-                    false   // Thinking opció
+                    finalPrompt,   // 0: Prompt + Dalszöveg
+                    audioDuration, // 1: Kliens által kért hossz (mp)
+                    -1,            // 2: Seed (-1 = random)
+                    false          // 3: Thinking
                 ]
             })
         });
