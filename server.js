@@ -84,22 +84,8 @@ app.post("/api/generate-free-audio", async (req, res) => {
     console.log("=== ACE-STEP FREE AUDIO GENERÁLÁS ===");
 
     try {
-        const { prompt, hfToken: tokenFromClient, apiKey } = req.body || {};
-        const hfToken = tokenFromClient || apiKey || process.env.HF_TOKEN;
-
-        if (!hfToken) {
-            return res.status(401).json({
-                success: false,
-                error: "Hiányzó Hugging Face API token."
-            });
-        }
-
-        if (!prompt) {
-            return res.status(400).json({
-                success: false,
-                error: "Hiányzó prompt."
-            });
-        }
+   //     const { prompt, hfToken: tokenFromClient, apiKey } = req.body || {};
+   
         // 1. Feladat indítása
         console.log("📩 Beérkező kérés body:", req.body);
 
