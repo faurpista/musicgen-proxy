@@ -76,36 +76,6 @@ const response = await fetch(`https://api-inference.huggingface.co/models/${MODE
     }
 });
 
-
-// ==========================================
-// 2. SZÖVEG GENERÁLÁS (Pollinations AI)
-// ==========================================
-app.post("/api/generate-text", async (req, res) => {
-    try {
-        const { prompt } = req.body;
-
-        if (!prompt) {
-            return res.status(400).json({ error: "Hiányzó prompt" });
-        }
-
-        const response = await fetch(
-            `https://text.pollinations.ai/${encodeURIComponent(prompt)}`
-        );
-
-        const text = await response.text();
-
-        if (!response.ok) {
-            return res.status(response.status).json({ error: text });
-        }
-
-        res.json({ result: text });
-
-    } catch (err) {
-        console.error("❌ SERVER EXCEPTION:", err);
-        res.status(500).json({ error: err.message });
-    }
-});
-
 // ==========================================
  // ==========================================
 // ACE-STEP FREE AUDIO GENERATION (Gradio API)
