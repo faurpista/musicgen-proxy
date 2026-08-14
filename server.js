@@ -598,6 +598,272 @@ app.post("/api/test-stable-audio", async (req, res) => {
     }
 });
 
+
+app.post("/api/generate-free-audio", async (req, res) => {
+    console.log("=== ACE-STEP FREE AUDIO ===");
+
+    try {
+        const {
+            prompt,
+            hfToken: tokenFromClient,
+            apiKey
+        } = req.body || {};
+
+        const hfToken =
+            tokenFromClient || apiKey;
+
+        if (!hfToken) {
+            return res.status(401).json({
+                success: false,
+                error: "Hiányzó Hugging Face API token."
+            });
+        }
+
+        if (!prompt) {
+            return res.status(400).json({
+                success: false,
+                error: "Hiányzó prompt."
+            });
+        }
+
+        console.log("🎵 Prompt:", prompt);
+        console.log("🔐 HF token: BEÉRKEZETT");
+
+        const SPACE =
+            "https://victor-ace-step-jam.hf.space";
+
+        const response = await fetch(
+            `${SPACE}/gradio_api/call/create`,
+            {
+                method: "POST",
+
+                headers: {
+                    "Authorization":
+                        `Bearer ${hfToken}`,
+                    "Content-Type":
+                        "application/json"
+                },
+
+                body: JSON.stringify({
+                    data: [
+                        prompt,
+                        10,
+                        -1,
+                        false
+                    ]
+                })
+            }
+        );
+
+        const text =
+            await response.text();
+
+        console.log(
+            "HF STATUS:",
+            response.status
+        );
+
+        console.log(
+            "HF RESPONSE:",
+            text.substring(0, 1000)
+        );
+
+        if (!response.ok) {
+            return res.status(response.status).json({
+                success: false,
+                step: "create",
+                status: response.status,
+                error: text
+            });
+        }
+
+        const data =
+            JSON.parse(text);
+
+        if (!data.event_id) {
+            return res.status(500).json({
+                success: false,
+                error: "Nincs event_id.",
+                response: data
+            });
+        }
+
+        const eventId =
+            data.event_id;
+
+        console.log(
+            "🆔 Event ID:",
+            eventId
+        );
+
+        // SSE eredmény
+        const resultResponse =
+            await fetch(
+                `${SPACE}/gradio_api/call/create/${eventId}`,
+                {
+                    headers: {
+                        "Authorization":
+                            `Bearer ${hfToken}`,
+                        "Accept":
+                            "text/event-stream"
+                    }
+                }
+            );
+
+        const resultText =
+            await resultResponse.text();
+
+        console.log(
+            "RESULT STATUS:",
+            resultResponse.status
+        );
+
+        console.log(
+            "RESULT:",
+            resultText.substring(0, 2000)
+        );
+
+        if (!resultResponse.ok) {
+            return res.status(
+                resultResponse.status
+            ).json({
+                success: false,
+                step: "result",
+                error: resultText
+            });
+        }
+
+        // Megkeressük a complete eseményt
+        const blocks =
+            resultText
+                .split("\n\n")
+                .filter(Boolean);
+
+        let result = null;
+
+        for (const block of blocks) {
+
+            if (!block.includes("event: complete")) {
+                continue;
+            }
+
+            const dataLine =
+                block
+                    .split("\n")
+                    .find(line =>
+                        line.startsWith("data:")
+                    );
+
+            if (!dataLine) continue;
+
+            const jsonText =
+                dataLine
+                    .substring(5)
+                    .trim();
+
+            result =
+                JSON.parse(jsonText);
+
+            break;
+        }
+
+        if (!result) {
+            return res.status(500).json({
+                success: false,
+                error:
+                    "Nem érkezett complete esemény.",
+                raw:
+                    resultText.substring(
+                        0,
+                        3000
+                    )
+            });
+        }
+
+        console.log("✅ Generálás kész.");
+
+        // A Space válaszának feldolgozása
+        let output = result;
+
+        if (Array.isArray(output)) {
+            output = output[0];
+        }
+
+        if (typeof output === "string") {
+            try {
+                output =
+                    JSON.parse(output);
+            } catch {}
+        }
+
+        console.log(
+            "OUTPUT:",
+            output
+        );
+
+        if (!output?.audio) {
+            return res.status(500).json({
+                success: false,
+                error:
+                    "Nem található audio az eredményben.",
+                output
+            });
+        }
+
+        const audioData =
+            output.audio;
+
+        const comma =
+            audioData.indexOf(",");
+
+        if (comma === -1) {
+            return res.status(500).json({
+                success: false,
+                error:
+                    "Hibás audio data URL."
+            });
+        }
+
+        const base64 =
+            audioData.substring(
+                comma + 1
+            );
+
+        const buffer =
+            Buffer.from(
+                base64,
+                "base64"
+            );
+
+        console.log(
+            "🎧 Audio:",
+            buffer.length,
+            "byte"
+        );
+
+        res.setHeader(
+            "Content-Type",
+            "audio/wav"
+        );
+
+        res.send(buffer);
+
+    } catch (error) {
+
+        console.error(
+            "❌ ACE-STEP ERROR:",
+            error
+        );
+
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});                                     
+
+    
+
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
