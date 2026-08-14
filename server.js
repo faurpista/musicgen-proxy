@@ -130,6 +130,8 @@ app.post("/api/generate-free-audio", async (req, res) => {
             });
         }
         // 1. Feladat indítása
+        console.log("📩 Beérkező kérés body:", req.body);
+
         const { 
             prompt, 
             hfToken: tokenFromClient, 
