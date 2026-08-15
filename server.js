@@ -230,6 +230,70 @@ app.post("/api/generate-free-audio", async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 });   
+// ==========================================
+// 2. SZÖVEG / DALSZÖVEG GENERÁLÁS (Hugging Face LLM)
+// ==========================================
+app.post("/api/generate-text", async (req, res) => {
+    console.log("=== DALSZÖVEG GENERÁLÁS (Hugging Face LLM) ===");
+
+    try {
+        const { prompt, hfToken: tokenFromClient, apiKey } = req.body;
+
+        if (!prompt) {
+            return res.status(400).json({ error: "Hiányzó prompt!" });
+        }
+
+        const hfToken = tokenFromClient || apiKey || process.env.HF_TOKEN;
+
+        if (!hfToken) {
+            return res.status(400).json({ error: "Hiányzó Hugging Face API kulcs!" });
+        }
+
+        // Hugging Face OpenAI-kompatibilis Chat API végpont
+        const response = await fetch("https://router.huggingface.co/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${hfToken}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                // Erős és ingyenesen elérhető szöveggeneráló modell a HF-en:
+                model: "Qwen/Qwen2.5-72B-Instruct", 
+                messages: [
+                    {
+                        role: "system",
+                        content: "You are a professional AI songwriter. Write catchy, structured song lyrics with [Verse], [Chorus], [Bridge], [Outro] tags. Output ONLY the lyrics without extra intro or commentary."
+                    },
+                    {
+                        role: "user",
+                        content: prompt
+                    }
+                ],
+                max_tokens: 600,
+                temperature: 0.7
+            })
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error("❌ Hugging Face Text API hiba:", response.status, errorText);
+            return res.status(response.status).json({
+                error: `Hugging Face Hiba (${response.status}): ${errorText}`
+            });
+        }
+
+        const data = await response.json();
+        // Az OpenAI/HF válaszformátumból kinyerjük a generált szöveget
+        const generatedText = data.choices?.[0]?.message?.content || "";
+
+        console.log("✅ Dalszöveg sikeresen legyártva!");
+        res.json({ result: generatedText });
+
+    } catch (err) {
+        console.error("❌ SERVER EXCEPTION:", err);
+        res.status(500).json({ error: `Szerver hiba: ${err.message}` });
+    }
+});
 
 const PORT = process.env.PORT || 3000;
 
