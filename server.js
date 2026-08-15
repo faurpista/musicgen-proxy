@@ -1,77 +1,65 @@
-const dns = require("dns");
-dns.setDefaultResultOrder("ipv4first");
-
-const express = require("express");
-const cors = require("cors");
-const { Client } = require("@gradio/client");
-
-const app = express();
-
-app.use(cors());
-app.use(express.json({ limit: "5mb" }));
-
 // ==========================================
-// 1. ZENE GENERÁLÁS (Hugging Face Inference API)
+// 1. FALLBACK MUSICGEN GENERÁLÁS (HF Inference Router)
 // ==========================================
 app.post("/api/generate-audio", async (req, res) => {
     console.log("=== GENERATE AUDIO HÍVÁS (MusicGen) ===");
 
     try {
-        const { prompt, apiKey, hfToken: tokenFromClient } = req.body || {};
+        const { prompt, apiKey } = req.body || {};
+        const hfToken = apiKey || process.env.HF_TOKEN;
 
-        if (!prompt) {
-            return res.status(400).json({ error: "Hiányzó prompt!" });
+        if (!hfToken) {
+            return res.status(401).json({ success: false, error: "Hiányzó Hugging Face API token." });
         }
 
-        const hfToken = tokenFromClient || apiKey || process.env.HF_TOKEN;
-        if (!hfToken) {
-            return res.status(400).json({ error: "Hiányzó Hugging Face API kulcs!" });
+        if (!prompt) {
+            return res.status(400).json({ success: false, error: "Hiányzó prompt." });
         }
 
         console.log(`🎶 Zene generálása: "${prompt}"...`);
 
-        const MODEL_NAME = "facebook/musicgen-small";
-        const response = await fetch(`https://api-inference.huggingface.co/models/${MODEL_NAME}`, {
-            method: "POST",
+        // Az új, hivatalos HF Router URL a régi api-inference helyett
+        const MUSICGEN_URL = "https://router.huggingface.co/hf-inference/models/facebook/musicgen-small";
+
+        const response = await fetch(MUSICGEN_URL, {
             headers: {
                 "Authorization": `Bearer ${hfToken}`,
                 "Content-Type": "application/json"
             },
-            body: JSON.stringify({
-                inputs: prompt,
-                options: { wait_for_model: true }
-            })
+            method: "POST",
+            body: JSON.stringify({ inputs: prompt }),
         });
 
         if (!response.ok) {
             const errorText = await response.text();
-            console.error("❌ Hugging Face API hiba:", response.status, errorText);
-            return res.status(response.status).json({
-                error: `Hugging Face Hiba (${response.status}): ${errorText}`
+            console.error("❌ MusicGen hiba válasz:", errorText);
+            return res.status(response.status).json({ 
+                success: false, 
+                error: `MusicGen hiba (${response.status}): ${errorText}` 
             });
         }
 
-        const arrayBuffer = await response.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
+        const audioArrayBuffer = await response.arrayBuffer();
+        const audioBuffer = Buffer.from(audioArrayBuffer);
 
-        console.log(`✅ Zene sikeresen legyártva! Méret: ${buffer.length} bájt`);
+        console.log(`🎧 MusicGen sikeres! Méret: ${audioBuffer.length} bájt`);
 
         res.setHeader("Content-Type", "audio/wav");
-        res.setHeader("Content-Length", buffer.length);
-        res.send(buffer);
+        res.setHeader("Content-Length", audioBuffer.length);
+        res.send(audioBuffer);
 
-    } catch (err) {
-        console.error("❌ SERVER EXCEPTION:", err);
-        res.status(500).json({ error: `Szerver hiba: ${err.message}` });
+    } catch (error) {
+        console.error("❌ SERVER EXCEPTION:", error);
+        res.status(500).json({ 
+            success: false, 
+            error: `Szerver hiba: ${error.message}` 
+        });
     }
 });
 
 // ==========================================
 // 2. ACE-STEP FREE AUDIO GENERÁLÁS (@gradio/client)
-// ==========================================
-// ==========================================
-// 2. ACE-STEP FREE AUDIO GENERÁLÁS (@gradio/client)
-// ==========================================
+// ≈=====≈===================================
 app.post("/api/generate-free-audio", async (req, res) => {
     console.log("=== ACE-STEP FREE AUDIO GENERÁLÁS (@gradio/client) ===");
 
