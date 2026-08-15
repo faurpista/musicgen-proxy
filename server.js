@@ -69,6 +69,9 @@ app.post("/api/generate-audio", async (req, res) => {
 // ==========================================
 // 2. ACE-STEP FREE AUDIO GENERÁLÁS (@gradio/client)
 // ==========================================
+// ==========================================
+// 2. ACE-STEP FREE AUDIO GENERÁLÁS (@gradio/client)
+// ==========================================
 app.post("/api/generate-free-audio", async (req, res) => {
     console.log("=== ACE-STEP FREE AUDIO GENERÁLÁS (@gradio/client) ===");
 
@@ -105,8 +108,6 @@ app.post("/api/generate-free-audio", async (req, res) => {
             hf_token: hfToken
         });
 
-        // 2. Generálás futtatása (Először index 0, utána fallback nevekkel)
-        let result;
         const apiPayload = [
             finalPrompt,        // 0: Prompt + Dalszöveg
             audioDuration,      // 1: Hossz másodpercben
@@ -114,28 +115,43 @@ app.post("/api/generate-free-audio", async (req, res) => {
             false               // 3: Thinking
         ];
 
+        let result;
+
+        // 2. Generálás futtatása okos hibakezeléssel
         try {
-            // A legtöbb Gradio Space-nél az elsődleges gomb az index 0
             result = await client.predict(0, apiPayload);
-        } catch (err1) {
-            console.warn("⚠️ Index 0 hiba, próbálkozás '/create' névvel...", err1.message);
+        } catch (err) {
+            const errMsg = err.message || "";
+            console.error("❌ Gradio hiba történt:", errMsg);
+
+            // Ha kimerült a ZeroGPU keret, nem próbálkozunk tovább
+            if (errMsg.includes("ZeroGPU") || errMsg.includes("exceeded your ZeroGPU")) {
+                return res.status(429).json({
+                    success: false,
+                    error: "Kimerült a Hugging Face ZeroGPU napi kereted erre az API tokenre! Használj egy másik HF tokent, vagy próbáld újra később."
+                });
+            }
+
+            // Ha nem ZeroGPU hiba volt, megpróbáljuk a '/create' végpontot
             try {
                 result = await client.predict("/create", apiPayload);
             } catch (err2) {
-                console.warn("⚠️ '/create' hiba, próbálkozás '/predict' névvel...", err2.message);
-                result = await client.predict("/predict", apiPayload);
+                return res.status(500).json({
+                    success: false,
+                    error: `Gradio API hiba: ${err2.message || errMsg}`
+                });
             }
         }
 
         console.log("✅ Generálás kész, válasz feldolgozása...");
 
-        // 3. Audio kinyerése
+        // 3. Audio adatok kinyerése
         const audioData = result?.data?.[0];
 
         if (!audioData) {
             return res.status(500).json({ 
                 success: false, 
-                error: "A Hugging Face Space lefutott, de nem küldött audio adatot (lehet, hogy túlterhelt a GPU)." 
+                error: "A Hugging Face Space lefutott, de nem küldött audio adatot." 
             });
         }
 
@@ -148,7 +164,7 @@ app.post("/api/generate-free-audio", async (req, res) => {
             const base64Data = audioData.split(",")[1];
             audioBuffer = Buffer.from(base64Data, "base64");
         } else {
-            return res.status(500).json({ success: false, error: "Ismeretlen audio formátum érkezett a Space-től." });
+            return res.status(500).json({ success: false, error: "Ismeretlen audio formátum érkezett." });
         }
 
         console.log(`🎧 Visszaküldés a kliensnek! Méret: ${audioBuffer.length} bájt`);
@@ -158,13 +174,14 @@ app.post("/api/generate-free-audio", async (req, res) => {
         res.send(audioBuffer);
 
     } catch (error) {
-        console.error("❌ GRADIO CLIENT EXCEPTION:", error);
+        console.error("❌ SERVER EXCEPTION:", error);
         res.status(500).json({ 
             success: false, 
-            error: `Gradio hiba: ${error.message || "A Space nem elérhető vagy éppen indul."}` 
+            error: `Szerver hiba: ${error.message || "Ismeretlen hiba történt."}` 
         });
     }
 });
+
 
 // ==========================================
 // 3. SZÖVEG / DALSZÖVEG GENERÁLÁS (Hugging Face LLM)
