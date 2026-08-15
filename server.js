@@ -182,10 +182,13 @@ app.post("/api/generate-free-audio", async (req, res) => {
             bufferStr += decoder.decode(value, { stream: true });
 
             if (bufferStr.includes("event: error")) {
-                gradioError = bufferStr;
-                reader.cancel();
-                break;
-            }
+    gradioError = bufferStr;
+    console.error("❌ A HUGGING FACE PONTOS HIBAÜZENETE:");
+    console.error(bufferStr); // <-- Kiírja a teljes Python hibaüzenetet a Render logba!
+    reader.cancel();
+    break;
+}
+
 
             if (bufferStr.includes("event: complete")) {
                 const blocks = bufferStr.split("\n\n");
