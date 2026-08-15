@@ -8,6 +8,89 @@ const app = express();
 
 app.use(cors());
 app.use(express.json({ limit: "5mb" }));
+const { Client } = require("@gradio/client");
+
+app.post("/api/generate-free-audio", async (req, res) => {
+    console.log("=== ACE-STEP FREE AUDIO GENERÁLÁS (@gradio/client) ===");
+
+    try {
+        const { 
+            prompt, 
+            hfToken: tokenFromClient, 
+            apiKey, 
+            duration,  
+            lyrics     
+        } = req.body || {};
+
+        const hfToken = tokenFromClient || apiKey || process.env.HF_TOKEN;
+
+        if (!hfToken) {
+            return res.status(401).json({ success: false, error: "Hiányzó Hugging Face API token." });
+        }
+
+        if (!prompt) {
+            return res.status(400).json({ success: false, error: "Hiányzó prompt." });
+        }
+
+        const audioDuration = Number(duration) || 7;
+
+        let finalPrompt = prompt;
+        if (lyrics && typeof lyrics === "string" && lyrics.trim() !== "") {
+            finalPrompt = `${prompt}\n\n${lyrics.trim()}`;
+        }
+
+        console.log(`🎵 Csatlakozás a Space-hez... Prompt: "${finalPrompt}" (${audioDuration}s)`);
+
+        // 1. Csatlakozás a Hugging Face Space-hez a tokennel
+        const client = await Client.connect("victor/ace-step-jam", {
+            hf_token: hfToken
+        });
+
+        // 2. Generálás futtatása a Gradio klienssel
+        const result = await client.predict("/predict", [
+            finalPrompt,        // 0: Prompt + Dalszöveg
+            audioDuration,     // 1: Hossz másodpercben
+            -1,                 // 2: Seed
+            false               // 3: Thinking
+        ]);
+
+        console.log("✅ Generálás kész, válasz feldolgozása...");
+
+        // 3. Az eredményből az audio fájl kinyerése
+        const audioData = result.data?.[0];
+
+        if (!audioData) {
+            return res.status(500).json({ success: false, error: "Nem érkezett audio adat a Space-től." });
+        }
+
+        // Ha a válasz egy URL (fájl elérhetőség a HF szerveren)
+        let audioBuffer;
+        if (typeof audioData === "object" && audioData.url) {
+            const audioFetch = await fetch(audioData.url);
+            const arrayBuf = await audioFetch.arrayBuffer();
+            audioBuffer = Buffer.from(arrayBuf);
+        } else if (typeof audioData === "string" && audioData.startsWith("data:audio")) {
+            // Ha Data URL-t kaptunk vissza
+            const base64Data = audioData.split(",")[1];
+            audioBuffer = Buffer.from(base64Data, "base64");
+        } else {
+            return res.status(500).json({ success: false, error: "Ismeretlen audio formátum érkezett.", audioData });
+        }
+
+        console.log(`🎧 Visszaküldés a kliensnek! Méret: ${audioBuffer.length} bájt`);
+
+        res.setHeader("Content-Type", "audio/wav");
+        res.setHeader("Content-Length", audioBuffer.length);
+        res.send(audioBuffer);
+
+    } catch (error) {
+        console.error("❌ GRADIO CLIENT EXCEPTION:", error);
+        res.status(500).json({ 
+            success: false, 
+            error: `Gradio hiba: ${error.message || "A Space nem elérhető vagy túlterhelt."}` 
+        });
+    }
+});
 
 // ==========================================
 // 1. ZENE GENERÁLÁS (Hugging Face Inference API)
@@ -68,7 +151,7 @@ app.post("/api/generate-audio", async (req, res) => {
 // ==========================================
 // 2. ACE-STEP FREE AUDIO GENERATION (Gradio API Stream Olvasóval)
 // ==========================================
-app.post("/api/generate-free-audio", async (req, res) => {
+app.post("/api/old-generate-free-audio", async (req, res) => {
     console.log("=== ACE-STEP FREE AUDIO GENERÁLÁS ===");
 
     try {
