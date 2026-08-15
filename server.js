@@ -1,3 +1,16 @@
+const dns = require("dns");
+dns.setDefaultResultOrder("ipv4first");
+
+const express = require("express");
+const cors = require("cors");
+const { Client } = require("@gradio/client");
+
+const app = express();
+
+app.use(cors());
+app.use(express.json({ limit: "5mb" }));
+
+
 // ==========================================
 // 1. FALLBACK MUSICGEN GENERÁLÁS (HF Inference Router)
 // ==========================================
