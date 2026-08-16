@@ -11,24 +11,39 @@ app.use(cors());
 app.use(express.json({ limit: "5mb" }));
 
 // Segédfunkció: Ingyenes Pollinations AI tartalék audióhoz (ZeroGPU / HF hiba esetére)
-// Segédfunkció: Pollinations AI tartalék audió generálás hosszal (ZeroGPU / HF hiba esetére)
 async function fetchHfInferenceAudio(prompt, duration, token) {
     const audioDuration = Number(duration) || 7;
     console.log(`⏳ Átállás Pollinations AI audió tartalékra (${audioDuration}s)...`);
     
-    const url = `https://audio.pollinations.ai/prompt/${encodeURIComponent(prompt)}?duration=${audioDuration}`;
-    const response = await fetch(url);
+    // A seed paramétert is hozzáadjuk a cache elkerülése miatt
+    const url = `https://audio.pollinations.ai/prompt/${encodeURIComponent(prompt)}?duration=${audioDuration}&seed=${Math.floor(Math.random() * 1000)}`;
 
-    if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Pollinations API hiba (${response.status}): ${errText}`);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000); // 60s timeout
+
+    try {
+        const response = await fetch(url, {
+            method: "GET",
+            headers: {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            },
+            signal: controller.signal,
+            redirect: "follow" // Biztosítja, hogy kövesse az esetleges átirányításokat
+        });
+
+        if (!response.ok) {
+            throw new Error(`Pollinations API hiba (${response.status})`);
+        }
+
+        const arrayBuf = await response.arrayBuffer();
+        return Buffer.from(arrayBuf);
+    } catch (err) {
+        console.error("❌ Pollinations végleges hiba:", err.message);
+        throw err;
+    } finally {
+        clearTimeout(timeout);
     }
-
-    const arrayBuf = await response.arrayBuffer();
-    return Buffer.from(arrayBuf);
 }
-
-
 
 // ==========================================
 // 1. ACE-STEP FREE AUDIO GENERÁLÁS (@gradio/client)
