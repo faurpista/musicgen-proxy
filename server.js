@@ -167,12 +167,25 @@ app.post("/api/generate-audio", async (req, res) => {
         });
 
         // 2. Generálás futtatása
-        const result = await client.predict("/predict", [
-            "MusicGen", // Model típus
-            prompt,     // Zenei leírás
-            null,       // Audio file input (ha nincs dallam követés)
-            audioDuration          // Hossz másodpercben
-        ]);
+        // Index alapú (0) hívás automatikus végpont- és paraméter-próbálkozásokkal
+let result;
+const simplePayload = [prompt, null, audioDuration];
+const fullPayload = ["MusicGen", prompt, null, audioDuration];
+
+try {
+    result = await client.predict(0, simplePayload);
+} catch (e1) {
+    try {
+        result = await client.predict(0, fullPayload);
+    } catch (e2) {
+        try {
+            result = await client.predict("/infer", simplePayload);
+        } catch (e3) {
+            result = await client.predict("/predict", fullPayload);
+        }
+    }
+}
+
 
         const audioData = result?.data?.[0];
         if (!audioData) {
