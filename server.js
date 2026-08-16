@@ -14,6 +14,7 @@ app.use(express.json({ limit: "5mb" }));
 // Segédfunkció: Gradio MusicGen tartalék (ha a ZeroGPU keret betelt)
 // Segédfunkció: Helyes paraméterezésű MusicGen tartalék
 // Segédfunkció: Dinamikus endpoint keresséssel ellátott MusicGen tartalék
+// Segédfunkció: Dinamikus sémalekérdezéssel ellátott MusicGen tartalék
 async function fetchFallbackAudio(prompt, duration, token) {
     const audioDuration = Number(duration) || 7;
     console.log(`⏳ Átállás facebook/MusicGen tartalékra (${audioDuration}s)...`);
@@ -22,37 +23,27 @@ async function fetchFallbackAudio(prompt, duration, token) {
         console.log("🎵 Csatlakozás a facebook/MusicGen Space-hez...");
         const client = await Client.connect("facebook/MusicGen", { hf_token: token });
 
-        // Lehetséges endpoint nevek és indexek
-        const possibleEndpoints = [0, 1, "/predict", "/infer", "/run_1"];
-        let result = null;
+        // Kiolvassuk a Space által támogatott valódi végpontokat a sémából
+        const dependencies = client.config?.dependencies || [];
+        const validEndpoint = dependencies.find(dep => dep.api_name);
+        
+        // Ha van elnevezett végpont (pl. "predict"), azt használjuk, különben a 0-s indexet
+        const endpointToCall = validEndpoint?.api_name ? `/${validEndpoint.api_name}` : 0;
 
-        for (const ep of possibleEndpoints) {
-            try {
-                // Megpróbáljuk a 3 paraméteres hívást (model, prompt, audio_input)
-                result = await client.predict(ep, ["musicgen-small", prompt, null]);
-                if (result?.data?.[0]) {
-                    console.log(`✅ Sikeres kapcsolódás a(z) '${ep}' endpointon!`);
-                    break;
-                }
-            } catch (e) {
-                // Próbálkozunk 2 paraméterrel is (prompt, audio_input), ha a modellnév nem kell
-                try {
-                    result = await client.predict(ep, [prompt, null]);
-                    if (result?.data?.[0]) {
-                        console.log(`✅ Sikeres kapcsolódás a(z) '${ep}' endpointon (2 paraméter)!`);
-                        break;
-                    }
-                } catch (err2) {
-                    // Ugrik a következő endpoint lehetőségre
-                }
-            }
+        console.log(`🎵 Érvényes végpont azonosítva: '${endpointToCall}'`);
+
+        // A facebook/MusicGen paraméterkiosztása
+        const result = await client.predict(endpointToCall, [
+            "musicgen-small",
+            prompt,
+            null
+        ]);
+
+        const audioData = result?.data?.[0];
+        if (!audioData) {
+            throw new Error("Nem érkezett audio adat a válaszban.");
         }
 
-        if (!result?.data?.[0]) {
-            throw new Error("Egyik ismert endpoint/index sem fogadta el a kérést.");
-        }
-
-        const audioData = result.data[0];
         const audioUrl = typeof audioData === "object" ? (audioData.url || audioData.path) : audioData;
 
         if (typeof audioUrl === "string" && audioUrl.startsWith("http")) {
@@ -62,14 +53,14 @@ async function fetchFallbackAudio(prompt, duration, token) {
         } else if (typeof audioData === "string" && audioData.startsWith("data:audio")) {
             const base64Data = audioData.split(",")[1];
             return Buffer.from(base64Data, "base64");
+        } else {
+            throw new Error("Ismeretlen audio válaszformátum.");
         }
     } catch (err) {
-        console.warn("⚠️ facebook/MusicGen hiba:", err.message);
+        console.warn("⚠️ MusicGen Gradio hiba:", err.message);
+        throw new Error(`A tartalék Space hívása nem sikerült: ${err.message}`);
     }
-
-    throw new Error("Nem sikerült elérni egyetlen működő MusicGen endpointot sem.");
 }
-
 
 // ==========================================
 // 1. ACE-STEP FREE AUDIO GENERÁLÁS (@gradio/client)
