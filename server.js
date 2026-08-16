@@ -11,10 +11,12 @@ app.use(cors());
 app.use(express.json({ limit: "5mb" }));
 
 // Segédfunkció: Ingyenes Pollinations AI tartalék audióhoz (ZeroGPU / HF hiba esetére)
-async function fetchHfInferenceAudio(prompt, token) {
-    console.log("⏳ Átállás Pollinations AI ingyenes audió tartalékra...");
+// Segédfunkció: Pollinations AI tartalék audió generálás hosszal (ZeroGPU / HF hiba esetére)
+async function fetchHfInferenceAudio(prompt, duration, token) {
+    const audioDuration = Number(duration) || 7;
+    console.log(`⏳ Átállás Pollinations AI audió tartalékra (${audioDuration}s)...`);
     
-    const url = `https://audio.pollinations.ai/prompt/${encodeURIComponent(prompt)}`;
+    const url = `https://audio.pollinations.ai/prompt/${encodeURIComponent(prompt)}?duration=${audioDuration}`;
     const response = await fetch(url);
 
     if (!response.ok) {
@@ -25,6 +27,7 @@ async function fetchHfInferenceAudio(prompt, token) {
     const arrayBuf = await response.arrayBuffer();
     return Buffer.from(arrayBuf);
 }
+
 
 
 // ==========================================
@@ -111,7 +114,9 @@ app.post("/api/generate-free-audio", async (req, res) => {
 
             // 2. Tartalék: HF Direct Inference (MusicGen-Small)
             try {
-                audioBuffer = await fetchHfInferenceAudio(finalPrompt, hfToken);
+                // Így hívd meg a catch ágban:
+                audioBuffer = await fetchHfInferenceAudio(finalPrompt, audioDuration, hfToken);
+
                 console.log(`🎧 HF Serverless tartalék siker! Méret: ${audioBuffer.length} bájt`);
             } catch (fallbackError) {
                 console.error("❌ Tartalék API hiba:", fallbackError.message);
