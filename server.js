@@ -148,6 +148,7 @@ app.post("/api/generate-free-audio", async (req, res) => {
 
         // 3. Audio adatok kinyerése
         const audioData = result?.data?.[0];
+console.log("🔍 audioData nyers tartalma:", JSON.stringify(audioData, null, 2));
 
         if (!audioData) {
             return res.status(500).json({ 
