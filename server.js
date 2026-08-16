@@ -18,22 +18,20 @@ app.use(express.json({ limit: "5mb" }));
 const https = require('https');
 
 // Segédfunkció: Kényszerített IPv4 HTTPS hívás (Render / Node.js fetch failed javítás)
-// Végleges tartalék funkció: Közvetlen Gradio REST /call/predict API
+// Végleges tartalék funkció: Gradio v3/v4 kompatibilis REST API (/api/predict)
 async function fetchFallbackAudio(prompt, duration, token) {
-    const audioDuration = Math.min(Math.floor(Number(duration) || 5), 10);
-    console.log(`⏳ Átállás közvetlen Gradio REST API-ra (facebook-musicgen)...`);
+    console.log(`⏳ Átállás Gradio v3/v4 REST API-ra (facebook-musicgen)...`);
 
-    const spaceHosts = [
-        "facebook-musicgen.hf.space",
-        "grandriver-musicgen.hf.space"
+    const endpoints = [
+        "https://facebook-musicgen.hf.space/api/predict",
+        "https://facebook-musicgen.hf.space/run/predict"
     ];
 
-    for (const host of spaceHosts) {
+    for (const url of endpoints) {
         try {
-            console.log(`🎵 Csatlakozás a Gradio REST felülethez: https://${host}...`);
+            console.log(`🎵 Próbálkozás végponttal: ${url}...`);
 
-            // 1. LÉPÉS: Kérés elküldése a Gradio /call/predict végpontra
-            const callRes = await fetch(`https://${host}/call/predict`, {
+            const response = await fetch(url, {
                 method: "POST",
                 headers: {
                     "Authorization": `Bearer ${token}`,
@@ -41,66 +39,49 @@ async function fetchFallbackAudio(prompt, duration, token) {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
                 },
                 body: JSON.stringify({
-                    data: ["musicgen-small", prompt, null]
+                    data: [
+                        "musicgen-small",
+                        prompt,
+                        null
+                    ]
                 })
             });
 
-            if (!callRes.ok) {
-                const errBody = await callRes.text();
-                console.warn(`⚠️ /call/predict hiba (${callRes.status}) [${host}]:`, errBody);
+            if (!response.ok) {
+                const errText = await response.text();
+                console.warn(`⚠️ Hiba (${response.status}) az alábbi címen [${url}]:`, errText.substring(0, 150));
                 continue;
             }
 
-            const { event_id } = await callRes.json();
-            if (!event_id) {
-                console.warn(`⚠️ Nem érkezett event_id a(z) ${host} szervertől.`);
+            const json = await response.json();
+            const audioObj = json?.data?.[0];
+
+            if (!audioObj) {
+                console.warn(`⚠️ Nem érkezett érvényes adatstruktúra innen: ${url}`);
                 continue;
             }
 
-            console.log(`⏳ Kérés sorba állítva (Event ID: ${event_id}), várakozás a generálásra...`);
+            // A fájl hivatkozás kinyerése (url, name vagy path mezőből)
+            let fileUrl = typeof audioObj === "object" ? (audioObj.url || audioObj.name || audioObj.path) : audioObj;
 
-            // 2. LÉPÉS: Az eredmény beérkezésének megvárása (SSE Stream olvasható válaszként)
-            const streamRes = await fetch(`https://${host}/call/predict/${event_id}`, {
-                headers: {
-                    "Authorization": `Bearer ${token}`,
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-                }
+            if (!fileUrl) {
+                console.warn(`⚠️ Hiányzó fájl hivatkozás a válaszban.`);
+                continue;
+            }
+
+            // Relatív /file=... útvonalak átalakítása teljes URL-lé
+            if (fileUrl.startsWith("/")) {
+                fileUrl = `https://facebook-musicgen.hf.space${fileUrl}`;
+            } else if (!fileUrl.startsWith("http")) {
+                fileUrl = `https://facebook-musicgen.hf.space/file=${fileUrl}`;
+            }
+
+            console.log(`🎧 Generált hangfájl letöltése: ${fileUrl}`);
+
+            const audioRes = await fetch(fileUrl, {
+                headers: { "Authorization": `Bearer ${token}` }
             });
 
-            const textData = await streamRes.text();
-            
-            // Megkeressük az audió fájl URL-jét a Gradio válaszában
-            let audioUrl = null;
-            const lines = textData.split("\n");
-
-            for (const line of lines) {
-                if (line.startsWith("data:")) {
-                    try {
-                        const parsed = JSON.parse(line.slice(5).trim());
-                        if (Array.isArray(parsed) && parsed[0]) {
-                            const item = parsed[0];
-                            audioUrl = typeof item === "object" ? (item.url || item.path) : item;
-                        }
-                    } catch (e) {
-                        // Nem JSON adat sora
-                    }
-                }
-            }
-
-            if (!audioUrl) {
-                console.warn(`⚠️ Nem található audió fájl URL a válaszban [${host}].`);
-                continue;
-            }
-
-            // Relatív útvonal esetén kiegészítjük a teljes domainnel
-            if (!audioUrl.startsWith("http")) {
-                audioUrl = `https://${host}${audioUrl.startsWith('/') ? '' : '/'}${audioUrl}`;
-            }
-
-            console.log(`🎧 Generált audió letöltése: ${audioUrl}`);
-
-            // 3. LÉPÉS: A generált WAV/MP3 fájl letöltése
-            const audioRes = await fetch(audioUrl);
             if (audioRes.ok) {
                 const arrayBuf = await audioRes.arrayBuffer();
                 const buffer = Buffer.from(arrayBuf);
@@ -110,11 +91,11 @@ async function fetchFallbackAudio(prompt, duration, token) {
                 }
             }
         } catch (err) {
-            console.warn(`⚠️ Hiba a(z) ${host} hívásakor:`, err.message);
+            console.warn(`⚠️ Hiba a(z) ${url} hívásakor:`, err.message);
         }
     }
 
-    throw new Error("Egyetlen Gradio tartalék Space sem tudta leduplikálni a kérést.");
+    throw new Error("Egyik Gradio REST végpont sem tudta előállítani a hangfájlt.");
 }
 
 // ==========================================
