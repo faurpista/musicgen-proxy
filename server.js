@@ -10,53 +10,22 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "5mb" }));
 
-// Segédfunkció: Hugging Face Direct Inference API tartalék audióhoz
-// Segédfunkció: HF Serverless Inference API tartalék audióhoz (Cold-Start és Timeout kezeléssel)
+// Segédfunkció: Ingyenes Pollinations AI tartalék audióhoz (ZeroGPU / HF hiba esetére)
 async function fetchHfInferenceAudio(prompt, token) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 90000); // 90 mp türelmi idő cold-startra
+    console.log("⏳ Átállás Pollinations AI ingyenes audió tartalékra...");
+    
+    const url = `https://audio.pollinations.ai/prompt/${encodeURIComponent(prompt)}`;
+    const response = await fetch(url);
 
-    const endpoints = [
-        "https://router.huggingface.co/hf-inference/models/facebook/musicgen-small",
-        "https://api-inference.huggingface.co/models/facebook/musicgen-small"
-    ];
-
-    let lastError;
-
-    try {
-        for (const url of endpoints) {
-            try {
-                console.log(`⏳ Tartalék próbálkozás ezen az URL-en: ${url}`);
-                const response = await fetch(url, {
-                    method: "POST",
-                    headers: {
-                        "Authorization": `Bearer ${token}`,
-                        "Content-Type": "application/json",
-                        "x-wait-for-model": "true", // FONTOS: Megvárja a modell betöltését, ne bontson kapcsolatot
-                        "use_cache": "false"
-                    },
-                    body: JSON.stringify({ inputs: prompt }),
-                    signal: controller.signal
-                });
-
-                if (response.ok) {
-                    const arrayBuf = await response.arrayBuffer();
-                    return Buffer.from(arrayBuf);
-                }
-
-                const errText = await response.text();
-                console.warn(`⚠️ HF Inference (${url}) válasz status ${response.status}: ${errText}`);
-                lastError = new Error(`HF Inference hiba (${response.status}): ${errText}`);
-            } catch (e) {
-                console.warn(`⚠️ HF Inference (${url}) hálózati hiba: ${e.message}`);
-                lastError = e;
-            }
-        }
-        throw lastError || new Error("Minden HF Inference URL sikertelen volt.");
-    } finally {
-        clearTimeout(timeoutId);
+    if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Pollinations API hiba (${response.status}): ${errText}`);
     }
+
+    const arrayBuf = await response.arrayBuffer();
+    return Buffer.from(arrayBuf);
 }
+
 
 // ==========================================
 // 1. ACE-STEP FREE AUDIO GENERÁLÁS (@gradio/client)
