@@ -11,64 +11,82 @@ app.use(cors());
 app.use(express.json({ limit: "5mb" }));
 
 // Segédfunkció: Intelligens argumentumszámlálóval ellátott MusicGen tartalék
+// Segédfunkció: HF Serverless Inference API + Biztonsági Gradio tartalék
 async function fetchFallbackAudio(prompt, duration, token) {
-    const audioDuration = Number(duration) || 7;
-    console.log(`⏳ Átállás facebook/MusicGen tartalékra (${audioDuration}s)...`);
+    console.log(`⏳ Átállás HF Serverless Inference API-ra (facebook/musicgen-small)...`);
 
+    // 1. ELSŐDLEGES TARTALÉK: Direct HF Serverless Inference API (Nincs ZeroGPU, nincs Gradio végpont-keresés)
     try {
-        console.log("🎵 Csatlakozás a facebook/MusicGen Space-hez...");
-        const client = await Client.connect("facebook/MusicGen", { hf_token: token });
+        const response = await fetch(
+            "https://api-inference.huggingface.co/models/facebook/musicgen-small",
+            {
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                    "Content-Type": "application/json",
+                },
+                method: "POST",
+                body: JSON.stringify({ inputs: prompt }),
+            }
+        );
 
+        if (response.ok) {
+            const arrayBuf = await response.arrayBuffer();
+            const buffer = Buffer.from(arrayBuf);
+            if (buffer.length > 1000) { // Ellenőrizzük, hogy valódi hangfájl-e
+                console.log(`🎧 Serverless API siker! Méret: ${buffer.length} bájt`);
+                return buffer;
+            }
+        } else {
+            const errText = await response.text();
+            console.warn(`⚠️ HF Serverless API válasz hiba (${response.status}):`, errText);
+        }
+    } catch (apiErr) {
+        console.warn("⚠️ HF Serverless API hálózati hiba:", apiErr.message);
+    }
+
+    // 2. MÁSODLAGOS TARTALÉK: Szigorúan szűrt Gradio Space hívás
+    console.log("⏳ Próbálkozás Gradio Space-szel (facebook/MusicGen)...");
+    try {
+        const client = await Client.connect("facebook/MusicGen", { hf_token: token });
         const dependencies = client.config?.dependencies || [];
 
-        // Megkeressük a normál végpontot (kiszűrve a "batched" típusút)
-        let dep = dependencies.find(d => d.api_name === "predict" || d.api_name === "/predict") 
-               || dependencies.find(d => d.api_name && !d.api_name.includes("batched"))
-               || dependencies[0];
+        // Kizárjuk a 'batched', 'example', 'load' és egyéb nem generáló végpontokat
+        const validDep = dependencies.find(d => 
+            d.api_name && 
+            !d.api_name.includes("batched") && 
+            !d.api_name.includes("example") &&
+            !d.api_name.includes("load")
+        );
 
-        if (!dep) {
-            throw new Error("Nem található érvényes végpont a Space-ben.");
-        }
+        const endpointName = validDep?.api_name ? `/${validDep.api_name.replace(/^\//, '')}` : "/predict";
+        console.log(`🎵 Szűrt érvényes végpont: '${endpointName}'`);
 
-        const endpointName = dep.api_name ? `/${dep.api_name.replace(/^\//, '')}` : 0;
-        const inputCount = dep.inputs ? dep.inputs.length : 3;
-
-        console.log(`🎵 Választott végpont: '${endpointName}' (várt paraméterek száma: ${inputCount})`);
-
-        // A várt argumentumszám alapján állítjuk össze a tömböt
-        let args = [];
-        if (inputCount === 1) {
-            args = [prompt];
-        } else if (inputCount === 2) {
-            args = [prompt, null];
-        } else if (inputCount === 3) {
-            args = ["musicgen-small", prompt, null];
-        } else if (inputCount >= 4) {
-            args = ["musicgen-small", prompt, null, audioDuration];
-        }
-
-        const result = await client.predict(endpointName, args);
+        const result = await client.predict(endpointName, [
+            "musicgen-small",
+            prompt,
+            null
+        ]);
 
         const audioData = result?.data?.[0];
-        if (!audioData) {
-            throw new Error("Nem érkezett audio adat a válaszban.");
-        }
+        if (!audioData) throw new Error("Nem érkezett audio adat a Space-ből.");
 
         const audioUrl = typeof audioData === "object" ? (audioData.url || audioData.path) : audioData;
 
         if (typeof audioUrl === "string" && audioUrl.startsWith("http")) {
-            const response = await fetch(audioUrl);
-            const arrayBuf = await response.arrayBuffer();
+            const res = await fetch(audioUrl);
+            const arrayBuf = await res.arrayBuffer();
             return Buffer.from(arrayBuf);
         } else if (typeof audioData === "string" && audioData.startsWith("data:audio")) {
             const base64Data = audioData.split(",")[1];
             return Buffer.from(base64Data, "base64");
-        } else {
-            throw new Error("Ismeretlen audio válaszformátum.");
         }
-    } catch (err) {
-        console.warn("⚠️ MusicGen Gradio hiba:", err?.message || err);
-        throw new Error(`A tartalék Space hívása nem sikerült: ${err?.message || err}`);
+        
+        throw new Error("Ismeretlen audio formátum a Space válaszában.");
+    } catch (gradioErr) {
+        // Részletes hibakiírás, hogy az objektumok se okozzanak [object Object] leállást
+        const errorDetails = typeof gradioErr === 'object' ? JSON.stringify(gradioErr) : gradioErr;
+        console.error("❌ Gradio Space hiba részletei:", errorDetails);
+        throw new Error(`Minden tartalék lehetőség sikertelen volt.`);
     }
 }
 
