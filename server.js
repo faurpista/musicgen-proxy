@@ -10,11 +10,7 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "5mb" }));
 
-// Segédfunkció: Ingyenes Pollinations AI tartalék audióhoz (ZeroGPU / HF hiba esetére)
-// Segédfunkció: Gradio MusicGen tartalék (ha a ZeroGPU keret betelt)
-// Segédfunkció: Helyes paraméterezésű MusicGen tartalék
-// Segédfunkció: Dinamikus endpoint keresséssel ellátott MusicGen tartalék
-// Segédfunkció: Dinamikus sémalekérdezéssel ellátott MusicGen tartalék
+// Segédfunkció: Intelligens argumentumszámlálóval ellátott MusicGen tartalék
 async function fetchFallbackAudio(prompt, duration, token) {
     const audioDuration = Number(duration) || 7;
     console.log(`⏳ Átállás facebook/MusicGen tartalékra (${audioDuration}s)...`);
@@ -23,21 +19,35 @@ async function fetchFallbackAudio(prompt, duration, token) {
         console.log("🎵 Csatlakozás a facebook/MusicGen Space-hez...");
         const client = await Client.connect("facebook/MusicGen", { hf_token: token });
 
-        // Kiolvassuk a Space által támogatott valódi végpontokat a sémából
         const dependencies = client.config?.dependencies || [];
-        const validEndpoint = dependencies.find(dep => dep.api_name);
-        
-        // Ha van elnevezett végpont (pl. "predict"), azt használjuk, különben a 0-s indexet
-        const endpointToCall = validEndpoint?.api_name ? `/${validEndpoint.api_name}` : 0;
 
-        console.log(`🎵 Érvényes végpont azonosítva: '${endpointToCall}'`);
+        // Megkeressük a normál végpontot (kiszűrve a "batched" típusút)
+        let dep = dependencies.find(d => d.api_name === "predict" || d.api_name === "/predict") 
+               || dependencies.find(d => d.api_name && !d.api_name.includes("batched"))
+               || dependencies[0];
 
-        // A facebook/MusicGen paraméterkiosztása
-        const result = await client.predict(endpointToCall, [
-            "musicgen-small",
-            prompt,
-            null
-        ]);
+        if (!dep) {
+            throw new Error("Nem található érvényes végpont a Space-ben.");
+        }
+
+        const endpointName = dep.api_name ? `/${dep.api_name.replace(/^\//, '')}` : 0;
+        const inputCount = dep.inputs ? dep.inputs.length : 3;
+
+        console.log(`🎵 Választott végpont: '${endpointName}' (várt paraméterek száma: ${inputCount})`);
+
+        // A várt argumentumszám alapján állítjuk össze a tömböt
+        let args = [];
+        if (inputCount === 1) {
+            args = [prompt];
+        } else if (inputCount === 2) {
+            args = [prompt, null];
+        } else if (inputCount === 3) {
+            args = ["musicgen-small", prompt, null];
+        } else if (inputCount >= 4) {
+            args = ["musicgen-small", prompt, null, audioDuration];
+        }
+
+        const result = await client.predict(endpointName, args);
 
         const audioData = result?.data?.[0];
         if (!audioData) {
@@ -57,8 +67,8 @@ async function fetchFallbackAudio(prompt, duration, token) {
             throw new Error("Ismeretlen audio válaszformátum.");
         }
     } catch (err) {
-        console.warn("⚠️ MusicGen Gradio hiba:", err.message);
-        throw new Error(`A tartalék Space hívása nem sikerült: ${err.message}`);
+        console.warn("⚠️ MusicGen Gradio hiba:", err?.message || err);
+        throw new Error(`A tartalék Space hívása nem sikerült: ${err?.message || err}`);
     }
 }
 
