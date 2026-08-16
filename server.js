@@ -11,38 +11,36 @@ app.use(cors());
 app.use(express.json({ limit: "5mb" }));
 
 // Segédfunkció: Ingyenes Pollinations AI tartalék audióhoz (ZeroGPU / HF hiba esetére)
+const https = require('https');
+
 async function fetchHfInferenceAudio(prompt, duration, token) {
-    const audioDuration = Number(duration) || 7;
-    console.log(`⏳ Átállás Pollinations AI audió tartalékra (${audioDuration}s)...`);
-    
-    // A seed paramétert is hozzáadjuk a cache elkerülése miatt
-    const url = `https://audio.pollinations.ai/prompt/${encodeURIComponent(prompt)}?duration=${audioDuration}&seed=${Math.floor(Math.random() * 1000)}`;
+    const audioDuration = Math.floor(Number(duration) || 7);
+    // A fő domainre irányítunk, ami támogatja az audiót, ha a model=audio paramétert megadjuk
+    const url = `https://pollinations.ai/prompt/${encodeURIComponent(prompt)}?model=audio&duration=${audioDuration}&seed=${Math.floor(Math.random() * 1000)}`;
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60000); // 60s timeout
+    return new Promise((resolve, reject) => {
+        console.log(`⏳ HTTPS stream indítása a Pollinations felé: ${url}`);
+        
+        const req = https.get(url, (res) => {
+            if (res.statusCode !== 200) {
+                return reject(new Error(`Pollinations API hiba: Status ${res.statusCode}`));
+            }
 
-    try {
-        const response = await fetch(url, {
-            method: "GET",
-            headers: {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            },
-            signal: controller.signal,
-            redirect: "follow" // Biztosítja, hogy kövesse az esetleges átirányításokat
+            const chunks = [];
+            res.on('data', (chunk) => chunks.push(chunk));
+            res.on('end', () => resolve(Buffer.concat(chunks)));
         });
 
-        if (!response.ok) {
-            throw new Error(`Pollinations API hiba (${response.status})`);
-        }
+        req.on('error', (err) => {
+            console.error("❌ HTTPS kérés hiba:", err.message);
+            reject(err);
+        });
 
-        const arrayBuf = await response.arrayBuffer();
-        return Buffer.from(arrayBuf);
-    } catch (err) {
-        console.error("❌ Pollinations végleges hiba:", err.message);
-        throw err;
-    } finally {
-        clearTimeout(timeout);
-    }
+        req.setTimeout(60000, () => {
+            req.destroy();
+            reject(new Error("HTTPS kérés időtúllépés (60s)"));
+        });
+    });
 }
 
 // ==========================================
