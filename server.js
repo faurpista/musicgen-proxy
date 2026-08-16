@@ -18,25 +18,24 @@ app.use(express.json({ limit: "5mb" }));
 const https = require('https');
 
 // Végleges tartalék funkció: Gradio REST API api_name/fn_index azonosítással
-// Végleges tartalék funkció: Gradio Queue (Sorban állási) protokoll HTTP-n keresztül
+// Végleges tartalék funkció: Univerzális SSE/Queue elemzővel ellátott MusicGen
 async function fetchFallbackAudio(prompt, duration, token) {
     const audioDuration = Math.min(Math.floor(Number(duration) || 5), 10);
-    console.log(`⏳ Átállás facebook/MusicGen Queue API-ra...`);
+    console.log(`⏳ Átállás facebook/MusicGen Queue API-ra (Univerzális SSE feloldással)...`);
 
     const host = "facebook-musicgen.hf.space";
-    // Egyedi munkamenet-azonosító generálása
     const sessionHash = Math.random().toString(36).substring(2, 13);
 
     const payload = {
         data: [
-            "musicgen-small", // Modell
-            prompt,           // Prompt
-            null,             // Audio input
-            audioDuration,    // Időtartam
-            250,              // Top-k
-            0,                // Top-p
-            1.0,              // Temp
-            3.0               // Guidance scale
+            "musicgen-small",
+            prompt,
+            null,
+            audioDuration,
+            250,
+            0,
+            1.0,
+            3.0
         ],
         event_data: null,
         fn_index: 0,
@@ -44,8 +43,8 @@ async function fetchFallbackAudio(prompt, duration, token) {
     };
 
     try {
-        // 1. LÉPÉS: Belépés a várakozási sorba (/queue/join)
-        console.log(`🎵 Csatlakozás a várakozási sorhoz (Session ID: ${sessionHash})...`);
+        // 1. LÉPÉS: Belépés a várakozási sorba
+        console.log(`🎵 Belépés a sorba (Session ID: ${sessionHash})...`);
         
         let joinRes = await fetch(`https://${host}/gradio_api/queue/join`, {
             method: "POST",
@@ -56,7 +55,6 @@ async function fetchFallbackAudio(prompt, duration, token) {
             body: JSON.stringify(payload)
         });
 
-        // Ha a /gradio_api/ előtaggal 404-et adna, megpróbáljuk anélkül is
         if (!joinRes.ok) {
             joinRes = await fetch(`https://${host}/queue/join`, {
                 method: "POST",
@@ -70,14 +68,13 @@ async function fetchFallbackAudio(prompt, duration, token) {
 
         if (!joinRes.ok) {
             const errText = await joinRes.text();
-            throw new Error(`Nem sikerült csatlakozni a sorhoz (${joinRes.status}): ${errText.substring(0, 100)}`);
+            throw new Error(`Sorba lépés hiba (${joinRes.status}): ${errText.substring(0, 100)}`);
         }
 
-        // 2. LÉPÉS: Eredmény lekérdezése az SSE adatfolyamból (/queue/data)
+        // 2. LÉPÉS: Várakozás és SSE adatfolyam letöltése
         console.log(`⏳ Várakozás a generálásra a sorban...`);
         
-        const streamUrl = `https://${host}/gradio_api/queue/data?session_hash=${sessionHash}`;
-        let streamRes = await fetch(streamUrl, {
+        let streamRes = await fetch(`https://${host}/gradio_api/queue/data?session_hash=${sessionHash}`, {
             headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
         });
 
@@ -90,54 +87,97 @@ async function fetchFallbackAudio(prompt, duration, token) {
         const streamText = await streamRes.text();
         let fileUrl = null;
 
-        // Az SSE stream sorainak elemzése a kész válaszért
+        // Rekurzív objektum-bejáró a tetszőleges mélységben lévő audió hivatkozásokhoz
+        function extractAudioUrl(obj) {
+            if (!obj) return null;
+            if (typeof obj === 'string') {
+                if (obj.includes('.wav') || obj.includes('.mp3') || obj.includes('/file=') || obj.includes('/tmp/') || obj.startsWith('http')) {
+                    return obj;
+                }
+                return null;
+            }
+            if (Array.isArray(obj)) {
+                for (const item of obj) {
+                    const res = extractAudioUrl(item);
+                    if (res) return res;
+                }
+            } else if (typeof obj === 'object') {
+                if (obj.url) return extractAudioUrl(obj.url);
+                if (obj.path) return extractAudioUrl(obj.path);
+                if (obj.name) return extractAudioUrl(obj.name);
+                for (const k of Object.keys(obj)) {
+                    if (k === 'event_data') continue;
+                    const res = extractAudioUrl(obj[k]);
+                    if (res) return res;
+                }
+            }
+            return null;
+        }
+
+        // A) Végigmegyünk az SSE stream összes "data:" során
         const lines = streamText.split("\n");
         for (const line of lines) {
             if (line.startsWith("data:")) {
                 try {
-                    const json = JSON.parse(line.slice(5).trim());
-                    // process_completed jelzi, amikor a generálás befejeződött
-                    if (json.msg === "process_completed" && json.output?.data?.[0]) {
-                        const audioObj = json.output.data[0];
-                        fileUrl = typeof audioObj === "object" ? (audioObj.url || audioObj.name || audioObj.path) : audioObj;
+                    const parsed = JSON.parse(line.slice(5).trim());
+                    const found = extractAudioUrl(parsed);
+                    if (found) {
+                        fileUrl = found;
                         break;
                     }
-                } catch (e) {
-                    // Nem JSON formátumú sor figyelmen kívül hagyása
-                }
+                } catch (e) {}
+            }
+        }
+
+        // B) Regex tartalék kereső, ha a JSON struktúrából kimaradt volna a minta
+        if (!fileUrl) {
+            const match = streamText.match(/"(https?:\/\/[^"]+\.(?:wav|mp3|flac|ogg)[^"]*)"/i) ||
+                          streamText.match(/("(?:\/file=|\/tmp\/)[^"]+\.(?:wav|mp3|flac|ogg)[^"]*")/i) ||
+                          streamText.match(/("(?:\/file=|\/tmp\/)[^"]+")/i);
+            if (match && match[1]) {
+                fileUrl = match[1].replace(/^"/, '').replace(/"$/, '');
             }
         }
 
         if (!fileUrl) {
-            throw new Error("A generálás lefutott, de nem található audió hivatkozás a válaszban.");
+            console.error("📋 SSE Válaszvááz (Debug):", streamText.substring(0, 300));
+            throw new Error("A generálás lefutott, de nem sikerült kiszűrni a hangfájl URL-jét.");
         }
 
-        // 3. LÉPÉS: A generált WAV fájl letöltése
-        let downloadUrl = fileUrl;
-        if (!downloadUrl.startsWith("http")) {
-            const cleanPath = downloadUrl.startsWith('/') ? downloadUrl : '/' + downloadUrl;
-            downloadUrl = `https://${host}/gradio_api/file=${cleanPath}`;
+        // 3. LÉPÉS: A fájl letöltése a lehetséges útvonalakról
+        const possibleDownloadUrls = [];
+        if (fileUrl.startsWith("http")) {
+            possibleDownloadUrls.push(fileUrl);
+        } else {
+            const clean = fileUrl.replace(/^\/file=/, '').replace(/^\//, '');
+            possibleDownloadUrls.push(`https://${host}/gradio_api/file=/${clean}`);
+            possibleDownloadUrls.push(`https://${host}/file=/${clean}`);
         }
 
-        console.log(`🎧 Generált fájl letöltése: ${downloadUrl}`);
-        const audioRes = await fetch(downloadUrl);
-        
-        if (audioRes.ok) {
-            const buffer = Buffer.from(await audioRes.arrayBuffer());
-            if (buffer.length > 2000) {
-                console.log(`✅ Sikeres MusicGen Queue generálás! Méret: ${buffer.length} bájt`);
-                return buffer;
+        console.log(`🎧 Hangfájl azonosítva (${fileUrl}), letöltés kísérlete...`);
+
+        for (const downloadUrl of possibleDownloadUrls) {
+            try {
+                const audioRes = await fetch(downloadUrl);
+                if (audioRes.ok) {
+                    const buffer = Buffer.from(await audioRes.arrayBuffer());
+                    if (buffer.length > 2000) {
+                        console.log(`✅ Sikeres MusicGen letöltés! Méret: ${buffer.length} bájt`);
+                        return buffer;
+                    }
+                }
+            } catch (dlErr) {
+                // Próbáljuk a következő elérési utat
             }
         }
 
-        throw new Error("A letöltött hangfájl érvénytelen vagy üres volt.");
+        throw new Error("Egyetlen letöltési útvonalról sem sikerült letölteni a kész audiót.");
 
     } catch (err) {
         console.warn(`⚠️ MusicGen Queue hiba:`, err.message);
         throw new Error(`A tartalék Queue API hívása nem sikerült: ${err.message}`);
     }
 }
-
 
 // ==========================================
 // 1. ACE-STEP FREE AUDIO GENERÁLÁS (@gradio/client)
