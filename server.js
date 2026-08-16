@@ -148,32 +148,63 @@ app.post("/api/generate-free-audio", async (req, res) => {
 
         // 3. Audio adatok kinyerése
         const audioData = result?.data?.[0];
-console.log("🔍 audioData nyers tartalma:", JSON.stringify(audioData, null, 2));
+//console.log("🔍 audioData nyers tartalma:", JSON.stringify(audioData, null, 2));
 
-        if (!audioData) {
-            return res.status(500).json({ 
-                success: false, 
-                error: "A Hugging Face Space lefutott, de nem küldött audio adatot." 
-            });
-        }
+if (!audioData) {
+    return res.status(500).json({ 
+        success: false, 
+        error: "A Hugging Face Space lefutott, de nem küldött audio adatot." 
+    });
+}
 
-        let audioBuffer;
-        if (typeof audioData === "object" && audioData.url) {
-            const audioFetch = await fetch(audioData.url);
-            const arrayBuf = await audioFetch.arrayBuffer();
-            audioBuffer = Buffer.from(arrayBuf);
-        } else if (typeof audioData === "string" && audioData.startsWith("data:audio")) {
-            const base64Data = audioData.split(",")[1];
-            audioBuffer = Buffer.from(base64Data, "base64");
-        } else {
-            return res.status(500).json({ success: false, error: "Ismeretlen audio formátum érkezett." });
-        }
+// 1. Ha az audioData egy JSON karakterlánc (pl. '{"audio": "data:audio/wav..."}')
+if (typeof audioData === "string" && audioData.trim().startsWith("{")) {
+    try {
+        audioData = JSON.parse(audioData);
+    } catch (e) {
+        console.error("⚠️ Nem sikerült JSON-ként értelmezni az audioData-t:", e);
+    }
+}
+
+// 2. Ha objektumról van szó, kinyerjük az audio / url / path mezőt
+if (typeof audioData === "object" && audioData !== null) {
+    audioData = audioData.audio || audioData.url || audioData.path;
+}
+
+let audioBuffer;
+
+try {
+    // A) Base64 Data URL (pl. "data:audio/wav;base64,...")
+    if (typeof audioData === "string" && audioData.startsWith("data:audio")) {
+        const base64Data = audioData.split(",")[1];
+        audioBuffer = Buffer.from(base64Data, "base64");
+    } 
+    // B) HTTP URL
+    else if (typeof audioData === "string" && audioData.startsWith("http")) {
+        const audioFetch = await fetch(audioData);
+        const arrayBuf = await audioFetch.arrayBuffer();
+        audioBuffer = Buffer.from(arrayBuf);
+    } 
+    // C) Tiszta Base64 string
+    else if (typeof audioData === "string" && audioData.length > 100) {
+        audioBuffer = Buffer.from(audioData, "base64");
+    } 
+    else {
+        console.error("❌ Ismeretlen audioData struktúra:", audioData);
+        return res.status(500).json({ 
+            success: false, 
+            error: "Ismeretlen audio formátum érkezett." 
+        });
+    }
 
         console.log(`🎧 Visszaküldés a kliensnek! Méret: ${audioBuffer.length} bájt`);
+// Beállítjuk a válasz fejléceket, hogy a böngésző audióként értelmezze
+    res.setHeader("Content-Type", "audio/wav"); // Ha MP3 érkezik, írd át 'audio/mpeg'-re
+    res.setHeader("Content-Length", audioBuffer.length);
 
-        res.setHeader("Content-Type", "audio/wav");
-        res.setHeader("Content-Length", audioBuffer.length);
-        res.send(audioBuffer);
+    // Nyers binary puffer visszaküldése a kliensnek
+    return res.status(200).send(audioBuffer);
+
 
     } catch (error) {
         console.error("❌ SERVER EXCEPTION:", error);
