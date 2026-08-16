@@ -13,232 +13,92 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "5mb" }));
 
-// Segédfunkció: Intelligens argumentumszámlálóval ellátott MusicGen tartalék
+// Segédfunkció: Intelligen9s argumentumszámlálóval ellátott MusicGen tartalék
 // Segédfunkció: HF Serverless Inference API + Biztonsági Gradio tartalék
 const https = require('https');
 
-// Segédfunkció: Kényszerített IPv4 HTTPS hívás (Render / Node.js fetch failed javítás)
-// Végleges tartalék funkció: Gradio v3/v4 kompatibilis REST API (/api/predict)
-// Végleges tartalék funkció: HF Space felület a helyes /gradio_api/ előtaggal
+// Végleges tartalék funkció: Gradio REST API api_name/fn_index azonosítással
 async function fetchFallbackAudio(prompt, duration, token) {
     const audioDuration = Math.min(Math.floor(Number(duration) || 5), 10);
-    console.log(`⏳ Átállás HF Space REST API-ra (/gradio_api/ előtaggal)...`);
+    console.log(`⏳ Átállás MusicGen REST API-ra (api_name & fn_index megadásával)...`);
 
-    const hosts = [
-        "facebook-musicgen.hf.space",
-        "grandriver-musicgen.hf.space"
+    // A facebook/MusicGen 8 kötelező paramétere
+    const payloadData = [
+        "musicgen-small", // Model
+        prompt,           // Text prompt
+        null,             // Audio input
+        audioDuration,    // Duration
+        250,              // Top-k
+        0,                // Top-p
+        1.0,              // Temperature
+        3.0               // Guidance scale
     ];
 
-    for (const host of hosts) {
-        // 1. PRÓBÁLKOZÁS: Modern Gradio 5 /gradio_api/call/predict (Event Stream)
-        try {
-            console.log(`🎵 Próbálkozás Gradio 5 API-val: https://${host}/gradio_api/call/predict...`);
-
-            const callRes = await fetch(`https://${host}/gradio_api/call/predict`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-                },
-                body: JSON.stringify({
-                    data: ["musicgen-small", prompt, null]
-                })
-            });
-
-            if (callRes.ok) {
-                const { event_id } = await callRes.json();
-                if (event_id) {
-                    console.log(`⏳ Kérés feldolgozás alatt (Event ID: ${event_id}), várakozás az eredményre...`);
-
-                    const streamRes = await fetch(`https://${host}/gradio_api/call/predict/${event_id}`, {
-                        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
-                    });
-
-                    const textData = await streamRes.text();
-                    let fileUrl = null;
-
-                    for (const line of textData.split("\n")) {
-                        if (line.startsWith("data:")) {
-                            try {
-                                const parsed = JSON.parse(line.slice(5).trim());
-                                if (Array.isArray(parsed) && parsed[0]) {
-                                    const item = parsed[0];
-                                    fileUrl = typeof item === "object" ? (item.url || item.path || item.name) : item;
-                                }
-                            } catch (e) {}
-                        }
-                    }
-
-                    if (fileUrl) {
-                        const fullAudioUrl = fileUrl.startsWith("http") 
-                            ? fileUrl 
-                            : `https://${host}/gradio_api${fileUrl.startsWith('/') ? '' : '/'}${fileUrl}`;
-
-                        console.log(`🎧 Generált audió letöltése: ${fullAudioUrl}`);
-                        const audioRes = await fetch(fullAudioUrl);
-                        if (audioRes.ok) {
-                            const buffer = Buffer.from(await audioRes.arrayBuffer());
-                            if (buffer.length > 2000) {
-                                console.log(`✅ Gradio 5 REST siker! Méret: ${buffer.length} bájt`);
-                                return buffer;
-                            }
-                        }
-                    }
-                }
-            } else {
-                console.warn(`⚠️ /gradio_api/call/predict elutasítva (${callRes.status})`);
-            }
-        } catch (err) {
-            console.warn(`⚠️ Gradio 5 hívási hiba [${host}]:`, err.message);
-        }
-
-        // 2. PRÓBÁLKOZÁS: Gradio 3/4 hagyományos /gradio_api/api/predict
-        try {
-            console.log(`🎵 Próbálkozás Gradio 3/4 API-val: https://${host}/gradio_api/api/predict...`);
-
-            const legacyRes = await fetch(`https://${host}/gradio_api/api/predict`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-                },
-                body: JSON.stringify({
-                    data: ["musicgen-small", prompt, null]
-                })
-// Végleges, hiánytalan 8-paraméteres Gradio REST tartalék
-async function fetchFallbackAudio(prompt, duration, token) {
-    const audioDuration = Math.min(Math.floor(Number(duration) || 5), 10);
-    console.log(`⏳ Átállás facebook/MusicGen REST API-ra (teljes paraméterkészlettel)...`);
-
-    const hosts = [
-        "facebook-musicgen.hf.space"
+    // Célzott végpontok és azonosítók
+    const targets = [
+        { host: "facebook-musicgen.hf.space", apiName: "/predict" },
+        { host: "facebook-musicgen.hf.space", fnIndex: 0 },
+        { host: "reach-vb-musicgen-small.hf.space", fnIndex: 0 }
     ];
 
-    // A facebook/MusicGen által elvárt MINDKÉT 8 paraméter:
-    // 1. Model: "musicgen-small"
-    // 2. Text prompt: string
-    // 3. Input audio: null
-    // 4. Duration: másodperc (szám)
-    // 5. Top-k: 250
-    // 6. Top-p: 0
-    // 7. Temperature: 1.0
-    // 8. Guidance Scale: 3.0
-    const fullPayload = [
-        "musicgen-small",
-        prompt,
-        null,
-        audioDuration,
-        250,
-        0,
-        1.0,
-        3.0
-    ];
-
-    for (const host of hosts) {
-        // 1. Próbálkozás: Gradio 5 Event Stream (/gradio_api/call/predict)
+    for (const target of targets) {
+        const host = target.host;
         try {
-            console.log(`🎵 Próbálkozás Gradio 5 API hívással: https://${host}/gradio_api/call/predict...`);
+            const url = `https://${host}/gradio_api/api/predict`;
+            console.log(`🎵 Próbálkozás: ${url} (${target.apiName ? 'api_name: ' + target.apiName : 'fn_index: ' + target.fnIndex})...`);
 
-            const callRes = await fetch(`https://${host}/gradio_api/call/predict`, {
+            const body = { data: payloadData };
+            if (target.apiName) body.api_name = target.apiName;
+            if (target.fnIndex !== undefined) body.fn_index = target.fnIndex;
+
+            const response = await fetch(url, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
                 },
-                body: JSON.stringify({ data: fullPayload })
+                body: JSON.stringify(body)
             });
 
-            if (callRes.ok) {
-                const { event_id } = await callRes.json();
-                if (event_id) {
-                    console.log(`⏳ Kérés feldolgozás alatt (Event ID: ${event_id}), várakozás...`);
+            if (!response.ok) {
+                const errText = await response.text();
+                console.warn(`⚠️ Hiba (${response.status}) [${host}]:`, errText.substring(0, 100));
+                continue;
+            }
 
-                    const streamRes = await fetch(`https://${host}/gradio_api/call/predict/${event_id}`, {
-                        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
-                    });
+            const json = await response.json();
+            const audioObj = json?.data?.[0];
 
-                    const textData = await streamRes.text();
-                    let fileUrl = null;
+            if (!audioObj) {
+                console.warn(`⚠️ Üres vagy érvénytelen válasz érkezett [${host}]`);
+                continue;
+            }
 
-                    for (const line of textData.split("\n")) {
-                        if (line.startsWith("data:")) {
-                            try {
-                                const parsed = JSON.parse(line.slice(5).trim());
-                                if (Array.isArray(parsed) && parsed[0]) {
-                                    const item = parsed[0];
-                                    fileUrl = typeof item === "object" ? (item.url || item.path || item.name) : item;
-                                }
-                            } catch (e) {}
-                        }
-                    }
+            let fileUrl = typeof audioObj === "object" ? (audioObj.url || audioObj.name || audioObj.path) : audioObj;
+            if (!fileUrl) continue;
 
-                    if (fileUrl) {
-                        const fullAudioUrl = fileUrl.startsWith("http") 
-                            ? fileUrl 
-                            : `https://${host}/gradio_api${fileUrl.startsWith('/') ? '' : '/'}${fileUrl}`;
+            // Relatív fájlútvonalak feloldása
+            if (!fileUrl.startsWith("http")) {
+                const cleanPath = fileUrl.startsWith('/') ? fileUrl : '/' + fileUrl;
+                fileUrl = `https://${host}/gradio_api/file=${cleanPath}`;
+            }
 
-                        console.log(`🎧 Generált audió letöltése: ${fullAudioUrl}`);
-                        const audioRes = await fetch(fullAudioUrl);
-                        if (audioRes.ok) {
-                            const buffer = Buffer.from(await audioRes.arrayBuffer());
-                            if (buffer.length > 2000) {
-                                console.log(`✅ Gradio REST tartalék siker! Méret: ${buffer.length} bájt`);
-                                return buffer;
-                            }
-                        }
-                    }
+            console.log(`🎧 Letöltés: ${fileUrl}`);
+            const audioRes = await fetch(fileUrl);
+            if (audioRes.ok) {
+                const buffer = Buffer.from(await audioRes.arrayBuffer());
+                if (buffer.length > 2000) {
+                    console.log(`✅ Sikeres MusicGen generálás! Méret: ${buffer.length} bájt`);
+                    return buffer;
                 }
-            } else {
-                console.warn(`⚠️ /gradio_api/call/predict válasz: ${callRes.status}`);
             }
         } catch (err) {
-            console.warn(`⚠️ Gradio 5 hívási hiba:`, err.message);
-        }
-
-        // 2. Próbálkozás: Szinkron Gradio 3/4 API (/gradio_api/api/predict)
-        try {
-            console.log(`🎵 Próbálkozás Gradio 3/4 API hívással: https://${host}/gradio_api/api/predict...`);
-
-            const legacyRes = await fetch(`https://${host}/gradio_api/api/predict`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-                },
-                body: JSON.stringify({ data: fullPayload })
-            });
-
-            if (legacyRes.ok) {
-                const json = await legacyRes.json();
-                const audioObj = json?.data?.[0];
-                let fileUrl = typeof audioObj === "object" ? (audioObj.url || audioObj.name || audioObj.path) : audioObj;
-
-                if (fileUrl) {
-                    const fullAudioUrl = fileUrl.startsWith("http") 
-                        ? fileUrl 
-                        : `https://${host}/gradio_api${fileUrl.startsWith('/') ? '' : '/'}${fileUrl}`;
-
-                    console.log(`🎧 Generált audió letöltése (legacy): ${fullAudioUrl}`);
-                    const audioRes = await fetch(fullAudioUrl);
-                    if (audioRes.ok) {
-                        const buffer = Buffer.from(await audioRes.arrayBuffer());
-                        if (buffer.length > 2000) {
-                            console.log(`✅ Gradio Legacy REST siker! Méret: ${buffer.length} bájt`);
-                            return buffer;
-                        }
-                    }
-                }
-            } else {
-                console.warn(`⚠️ /gradio_api/api/predict válasz: ${legacyRes.status}`);
-            }
-        } catch (err) {
-            console.warn(`⚠️ Gradio Legacy hívási hiba:`, err.message);
+            console.warn(`⚠️ Hálózati hiba [${host}]:`, err.message);
         }
     }
 
-    throw new Error("A MusicGen tartalék Space nem tudta feldolgozni a kérést.");
+    throw new Error("Egyetlen tartalék MusicGen Space sem tudta előállítani a hangfájlt.");
 }
-
 
 // ==========================================
 // 1. ACE-STEP FREE AUDIO GENERÁLÁS (@gradio/client)
