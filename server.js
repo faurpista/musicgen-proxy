@@ -13,7 +13,6 @@ app.use(express.json({ limit: "5mb" }));
 // ==========================================
 // 1. ACE-STEP FREE AUDIO GENERÁLÁS (@gradio/client)
 // ≈=====≈======≈============================
-
 app.post("/api/generate-free-audio", async (req, res) => {
     console.log("=== ACE-STEP FREE AUDIO GENERÁLÁS (@gradio/client) ===");
 
@@ -45,7 +44,6 @@ app.post("/api/generate-free-audio", async (req, res) => {
 
         console.log(`🎵 Csatlakozás a Space-hez... Prompt: "${finalPrompt}" (${audioDuration}s)`);
 
-        // 1. Csatlakozás a Hugging Face Space-hez
         const client = await Client.connect("victor/ace-step-jam", {
             hf_token: hfToken
         });
@@ -59,31 +57,40 @@ app.post("/api/generate-free-audio", async (req, res) => {
 
         let result;
 
-        // 2. Generálás futtatása okos hibakezeléssel
+        // 1. Megpróbáljuk az ACE-Step Space-t
         try {
             result = await client.predict(0, apiPayload);
         } catch (err) {
-            const errMsg = err.message || "";
-            console.error("❌ Gradio hiba történt:", errMsg);
+            console.warn("⚠️ HF Space / ZeroGPU hiba, azonnali átállás Pollinations-re:", err.message);
 
-             // Ha kimerült a ZeroGPU keret, logoljuk és engedjük tovább a Pollinations tartalékra
-            if (errMsg.includes("ZeroGPU") || errMsg.includes("exceeded your ZeroGPU")) {
-                console.warn("⚠️ ZeroGPU keret kimerült a HF tokennel, átállás Pollinations tartalékra...");
-            }
-
+            // 2. Hiba (pl. ZeroGPU keret) esetén azonnal elindul a Pollinations tartalék
             try {
-                result = await client.predict("/create", apiPayload);
-            } catch (err2) {
+                const pollUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(finalPrompt)}?model=audio&seed=${Math.floor(Math.random() * 1000)}`;
+                const pollFetch = await fetch(pollUrl);
+
+                if (!pollFetch.ok) throw new Error("A Pollinations tartalék sem érhető el.");
+
+                const arrayBuf = await pollFetch.arrayBuffer();
+                const audioBuffer = Buffer.from(arrayBuf);
+
+                console.log(`🎧 Pollinations siker! Méret: ${audioBuffer.length} bájt`);
+
+                res.setHeader("Content-Type", "audio/mpeg");
+                res.setHeader("Content-Length", audioBuffer.length);
+                return res.status(200).send(audioBuffer);
+
+            } catch (fallbackError) {
+                console.error("❌ Pollinations hiba:", fallbackError.message);
                 return res.status(500).json({
                     success: false,
-                    error: `Gradio API hiba: ${err2.message || errMsg}`
+                    error: "A Hugging Face és a Pollinations tartalék is sikertelen volt."
                 });
             }
         }
 
         console.log("✅ Generálás kész, válasz feldolgozása...");
 
-        // 3. Audio adatok kinyerése (let használata const helyett az átírhatóságért)
+        // 3. Ha a HF Space sikeres volt, kinyerjük az adatot
         let audioData = result?.data?.[0];
 
         if (!audioData) {
@@ -93,7 +100,6 @@ app.post("/api/generate-free-audio", async (req, res) => {
             });
         }
 
-        // A) Ha az audioData egy JSON karakterlánc (pl. '{"audio": "data:audio/wav..."}')
         if (typeof audioData === "string" && audioData.trim().startsWith("{")) {
             try {
                 audioData = JSON.parse(audioData);
@@ -102,14 +108,12 @@ app.post("/api/generate-free-audio", async (req, res) => {
             }
         }
 
-        // B) Ha objektumról van szó, kinyerjük a megfelelő mezőt
         if (typeof audioData === "object" && audioData !== null) {
             audioData = audioData.audio || audioData.url || audioData.path;
         }
 
         let audioBuffer;
 
-        // C) Átalakítás pufferre
         if (typeof audioData === "string" && audioData.startsWith("data:audio")) {
             const base64Data = audioData.split(",")[1];
             audioBuffer = Buffer.from(base64Data, "base64");
@@ -120,7 +124,6 @@ app.post("/api/generate-free-audio", async (req, res) => {
         } else if (typeof audioData === "string" && audioData.length > 100) {
             audioBuffer = Buffer.from(audioData, "base64");
         } else {
-            console.error("❌ Ismeretlen audioData struktúra:", audioData);
             return res.status(500).json({ 
                 success: false, 
                 error: "Ismeretlen audio formátum érkezett." 
@@ -131,7 +134,6 @@ app.post("/api/generate-free-audio", async (req, res) => {
         
         res.setHeader("Content-Type", "audio/wav");
         res.setHeader("Content-Length", audioBuffer.length);
-
         return res.status(200).send(audioBuffer);
 
     } catch (error) {
