@@ -66,11 +66,9 @@ app.post("/api/generate-free-audio", async (req, res) => {
             const errMsg = err.message || "";
             console.error("❌ Gradio hiba történt:", errMsg);
 
+             // Ha kimerült a ZeroGPU keret, logoljuk és engedjük tovább a Pollinations tartalékra
             if (errMsg.includes("ZeroGPU") || errMsg.includes("exceeded your ZeroGPU")) {
-                return res.status(429).json({
-                    success: false,
-                    error: "Kimerült a Hugging Face ZeroGPU napi kereted erre az API tokenre! Használj egy másik HF tokent, vagy próbáld újra később."
-                });
+                console.warn("⚠️ ZeroGPU keret kimerült a HF tokennel, átállás Pollinations tartalékra...");
             }
 
             try {
