@@ -148,7 +148,7 @@ app.post("/api/generate-free-audio", async (req, res) => {
 // ==========================================
 // 2. FALLBACK MUSICGEN GENERÁLÁS (HF Inference Router)
 // ==========================================
-app.post("/api/generate-musicgen", async (req, res) => {
+app.post("/api/generate-audio", async (req, res) => {
     const { prompt, hfToken, apiKey, duration} = req.body || {};
     const token = hfToken || apiKey || process.env.HF_TOKEN;
 
