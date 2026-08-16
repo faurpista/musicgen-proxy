@@ -18,64 +18,103 @@ app.use(express.json({ limit: "5mb" }));
 const https = require('https');
 
 // Segédfunkció: Kényszerített IPv4 HTTPS hívás (Render / Node.js fetch failed javítás)
-// Végleges tartalék funkció: HF Serverless Inference API (Router + Legacy)
+// Végleges tartalék funkció: Közvetlen Gradio REST /call/predict API
 async function fetchFallbackAudio(prompt, duration, token) {
     const audioDuration = Math.min(Math.floor(Number(duration) || 5), 10);
-    console.log(`⏳ Átállás HF Serverless API-ra (IPv4-first DNS-sel)...`);
+    console.log(`⏳ Átállás közvetlen Gradio REST API-ra (facebook-musicgen)...`);
 
-    // A Hugging Face szerverless API címei (Új Router + Klasszikus végpontok)
-    const endpoints = [
-        "https://router.huggingface.co/hf-inference/models/facebook/musicgen-small",
-        "https://api-inference.huggingface.co/models/facebook/musicgen-small",
-        "https://router.huggingface.co/hf-inference/models/facebook/musicgen-medium"
+    const spaceHosts = [
+        "facebook-musicgen.hf.space",
+        "grandriver-musicgen.hf.space"
     ];
 
-    for (const url of endpoints) {
+    for (const host of spaceHosts) {
         try {
-            console.log(`🎵 Próbálkozás API hívással: ${url}...`);
+            console.log(`🎵 Csatlakozás a Gradio REST felülethez: https://${host}...`);
 
-            const response = await fetch(url, {
+            // 1. LÉPÉS: Kérés elküldése a Gradio /call/predict végpontra
+            const callRes = await fetch(`https://${host}/call/predict`, {
                 method: "POST",
                 headers: {
                     "Authorization": `Bearer ${token}`,
                     "Content-Type": "application/json",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-                    "Accept": "audio/wav, audio/mpeg"
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
                 },
                 body: JSON.stringify({
-                    inputs: prompt,
-                    parameters: {
-                        max_new_tokens: audioDuration * 50
-                    }
+                    data: ["musicgen-small", prompt, null]
                 })
             });
 
-            // Ha a modell épp ébred (HTTP 503)
-            if (response.status === 503) {
-                console.warn(`⏳ A modell épp ébred (503), várakozás 10 mp...`);
-                await new Promise(r => setTimeout(r, 10000));
+            if (!callRes.ok) {
+                const errBody = await callRes.text();
+                console.warn(`⚠️ /call/predict hiba (${callRes.status}) [${host}]:`, errBody);
                 continue;
             }
 
-            if (!response.ok) {
-                const errorText = await response.text();
-                console.warn(`⚠️ Hiba (${response.status}) az alábbi címen [${url}]:`, errorText);
+            const { event_id } = await callRes.json();
+            if (!event_id) {
+                console.warn(`⚠️ Nem érkezett event_id a(z) ${host} szervertől.`);
                 continue;
             }
 
-            const arrayBuf = await response.arrayBuffer();
-            const buffer = Buffer.from(arrayBuf);
+            console.log(`⏳ Kérés sorba állítva (Event ID: ${event_id}), várakozás a generálásra...`);
 
-            if (buffer.length > 2000) {
-                console.log(`🎧 Serverless API siker! (${url}, Méret: ${buffer.length} bájt)`);
-                return buffer;
+            // 2. LÉPÉS: Az eredmény beérkezésének megvárása (SSE Stream olvasható válaszként)
+            const streamRes = await fetch(`https://${host}/call/predict/${event_id}`, {
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+                }
+            });
+
+            const textData = await streamRes.text();
+            
+            // Megkeressük az audió fájl URL-jét a Gradio válaszában
+            let audioUrl = null;
+            const lines = textData.split("\n");
+
+            for (const line of lines) {
+                if (line.startsWith("data:")) {
+                    try {
+                        const parsed = JSON.parse(line.slice(5).trim());
+                        if (Array.isArray(parsed) && parsed[0]) {
+                            const item = parsed[0];
+                            audioUrl = typeof item === "object" ? (item.url || item.path) : item;
+                        }
+                    } catch (e) {
+                        // Nem JSON adat sora
+                    }
+                }
+            }
+
+            if (!audioUrl) {
+                console.warn(`⚠️ Nem található audió fájl URL a válaszban [${host}].`);
+                continue;
+            }
+
+            // Relatív útvonal esetén kiegészítjük a teljes domainnel
+            if (!audioUrl.startsWith("http")) {
+                audioUrl = `https://${host}${audioUrl.startsWith('/') ? '' : '/'}${audioUrl}`;
+            }
+
+            console.log(`🎧 Generált audió letöltése: ${audioUrl}`);
+
+            // 3. LÉPÉS: A generált WAV/MP3 fájl letöltése
+            const audioRes = await fetch(audioUrl);
+            if (audioRes.ok) {
+                const arrayBuf = await audioRes.arrayBuffer();
+                const buffer = Buffer.from(arrayBuf);
+                if (buffer.length > 2000) {
+                    console.log(`✅ Gradio REST tartalék siker! Méret: ${buffer.length} bájt`);
+                    return buffer;
+                }
             }
         } catch (err) {
-            console.warn(`⚠️ Hálózati hiba [${url}]:`, err.message);
+            console.warn(`⚠️ Hiba a(z) ${host} hívásakor:`, err.message);
         }
     }
 
-    throw new Error("A tartalék Serverless API-k egyike sem adott vissza érvényes audiót.");
+    throw new Error("Egyetlen Gradio tartalék Space sem tudta leduplikálni a kérést.");
 }
 
 // ==========================================
