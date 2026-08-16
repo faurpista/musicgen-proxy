@@ -15,15 +15,23 @@ const https = require('https');
 
 async function fetchHfInferenceAudio(prompt, duration, token) {
     const audioDuration = Math.floor(Number(duration) || 7);
-    // A fő domainre irányítunk, ami támogatja az audiót, ha a model=audio paramétert megadjuk
-    const url = `https://pollinations.ai/prompt/${encodeURIComponent(prompt)}?model=audio&duration=${audioDuration}&seed=${Math.floor(Math.random() * 1000)}`;
+    // Ez a helyes API végpont: audio.pollinations.ai
+    const url = `https://audio.pollinations.ai/prompt/${encodeURIComponent(prompt)}?duration=${audioDuration}&seed=${Math.floor(Math.random() * 1000)}`;
 
     return new Promise((resolve, reject) => {
-        console.log(`⏳ HTTPS stream indítása a Pollinations felé: ${url}`);
+        console.log(`⏳ HTTPS kérés a Pollinations API felé: ${url}`);
         
         const req = https.get(url, (res) => {
+            // Ellenőrizzük, hogy a válasz valóban audió-e
+            const contentType = res.headers['content-type'] || '';
+            
             if (res.statusCode !== 200) {
                 return reject(new Error(`Pollinations API hiba: Status ${res.statusCode}`));
+            }
+
+            // Ha HTML jön vissza, az azt jelenti, hogy rossz az URL vagy az API elutasította a kérést
+            if (contentType.includes('text/html')) {
+                return reject(new Error("A Pollinations API HTML-t küldött vissza, nem audiót (rossz végpont vagy tiltás)."));
             }
 
             const chunks = [];
@@ -32,7 +40,7 @@ async function fetchHfInferenceAudio(prompt, duration, token) {
         });
 
         req.on('error', (err) => {
-            console.error("❌ HTTPS kérés hiba:", err.message);
+            console.error("❌ HTTPS kérés hiba (valószínűleg DNS/Firewall):", err.message);
             reject(err);
         });
 
