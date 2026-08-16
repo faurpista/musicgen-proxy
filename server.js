@@ -166,26 +166,14 @@ app.post("/api/generate-audio", async (req, res) => {
             hf_token: token || undefined
         });
 
-        // 2. Generálás futtatása
-        // Index alapú (0) hívás automatikus végpont- és paraméter-próbálkozásokkal
-let result;
-const simplePayload = [prompt, null, audioDuration];
-const fullPayload = ["MusicGen", prompt, null, audioDuration];
-
-try {
-    result = await client.predict(0, simplePayload);
-} catch (e1) {
-    try {
-        result = await client.predict(0, fullPayload);
-    } catch (e2) {
+        // 2. Generálás futtatása egyetlen gyors próbálkozással
+        let result;
         try {
-            result = await client.predict("/infer", simplePayload);
-        } catch (e3) {
-            result = await client.predict("/predict", fullPayload);
+            result = await client.predict(0, [prompt, null, audioDuration]);
+        } catch (e) {
+            console.warn("⚠️ MusicGen Space hívás sikertelen, azonnali átállás Pollinations-re...");
+            throw e; // Átdobja a külső catch ágba, ami elindítja a Pollinations-t
         }
-    }
-}
-
 
         const audioData = result?.data?.[0];
         if (!audioData) {
