@@ -13,28 +13,46 @@ app.use(express.json({ limit: "5mb" }));
 // Segédfunkció: Ingyenes Pollinations AI tartalék audióhoz (ZeroGPU / HF hiba esetére)
 // Segédfunkció: Gradio MusicGen tartalék (ha a ZeroGPU keret betelt)
 // Segédfunkció: Helyes paraméterezésű MusicGen tartalék
+// Segédfunkció: Dinamikus endpoint keresséssel ellátott MusicGen tartalék
 async function fetchFallbackAudio(prompt, duration, token) {
     const audioDuration = Number(duration) || 7;
     console.log(`⏳ Átállás facebook/MusicGen tartalékra (${audioDuration}s)...`);
 
-    // 1. Próbálkozás a hivatalos facebook/MusicGen Space-szel a HELYES paraméter-sorrenddel
     try {
-        console.log("🎵 Próbálkozás: facebook/MusicGen (helyes paraméterezéssel)...");
+        console.log("🎵 Csatlakozás a facebook/MusicGen Space-hez...");
         const client = await Client.connect("facebook/MusicGen", { hf_token: token });
 
-        // A facebook/MusicGen bemeneti struktúrája:
-        // [0]: Modell opció ("musicgen-small", "musicgen-medium", stb.)
-        // [1]: Szöveges prompt ("Hard rock music")
-        // [2]: Audio input / dallam fájl (null)
-        const result = await client.predict("/predict", [
-            "musicgen-small",
-            prompt,
-            null
-        ]);
+        // Lehetséges endpoint nevek és indexek
+        const possibleEndpoints = [0, 1, "/predict", "/infer", "/run_1"];
+        let result = null;
 
-        const audioData = result?.data?.[0];
-        if (!audioData) throw new Error("Nem érkezett audio adat.");
+        for (const ep of possibleEndpoints) {
+            try {
+                // Megpróbáljuk a 3 paraméteres hívást (model, prompt, audio_input)
+                result = await client.predict(ep, ["musicgen-small", prompt, null]);
+                if (result?.data?.[0]) {
+                    console.log(`✅ Sikeres kapcsolódás a(z) '${ep}' endpointon!`);
+                    break;
+                }
+            } catch (e) {
+                // Próbálkozunk 2 paraméterrel is (prompt, audio_input), ha a modellnév nem kell
+                try {
+                    result = await client.predict(ep, [prompt, null]);
+                    if (result?.data?.[0]) {
+                        console.log(`✅ Sikeres kapcsolódás a(z) '${ep}' endpointon (2 paraméter)!`);
+                        break;
+                    }
+                } catch (err2) {
+                    // Ugrik a következő endpoint lehetőségre
+                }
+            }
+        }
 
+        if (!result?.data?.[0]) {
+            throw new Error("Egyik ismert endpoint/index sem fogadta el a kérést.");
+        }
+
+        const audioData = result.data[0];
         const audioUrl = typeof audioData === "object" ? (audioData.url || audioData.path) : audioData;
 
         if (typeof audioUrl === "string" && audioUrl.startsWith("http")) {
@@ -49,34 +67,9 @@ async function fetchFallbackAudio(prompt, duration, token) {
         console.warn("⚠️ facebook/MusicGen hiba:", err.message);
     }
 
-    // 2. Tartalék próbálkozás alternatív aktív Space-ekkel
-    const backupSpaces = [
-        "grandriver/MusicGen",
-        "CocktailPeanut/musicgen"
-    ];
-
-    for (const space of backupSpaces) {
-        try {
-            console.log(`🎵 Próbálkozás alternatív Space-szel: ${space}...`);
-            const client = await Client.connect(space, { hf_token: token });
-            const result = await client.predict(0, [prompt, null, audioDuration]);
-            const audioData = result?.data?.[0];
-
-            if (audioData) {
-                const audioUrl = typeof audioData === "object" ? (audioData.url || audioData.path) : audioData;
-                if (typeof audioUrl === "string" && audioUrl.startsWith("http")) {
-                    const response = await fetch(audioUrl);
-                    const arrayBuf = await response.arrayBuffer();
-                    return Buffer.from(arrayBuf);
-                }
-            }
-        } catch (err) {
-            console.warn(`⚠️ Hiba a(z) ${space} Space hívásakor:`, err.message);
-        }
-    }
-
-    throw new Error("Minden MusicGen tartalék lehetőség sikertelen volt.");
+    throw new Error("Nem sikerült elérni egyetlen működő MusicGen endpointot sem.");
 }
+
 
 // ==========================================
 // 1. ACE-STEP FREE AUDIO GENERÁLÁS (@gradio/client)
