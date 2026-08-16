@@ -19,44 +19,67 @@ const https = require('https');
 
 // Végleges tartalék funkció: Gradio REST API api_name/fn_index azonosítással
 // Végleges tartalék funkció: Univerzális SSE/Queue elemzővel ellátott MusicGen
+// Végleges tartalék funkció: HF Inference API + Több Gradio Space fallback
 async function fetchFallbackAudio(prompt, duration, token) {
     const audioDuration = Math.min(Math.floor(Number(duration) || 5), 10);
-    console.log(`⏳ Átállás facebook/MusicGen Queue API-ra (Univerzális SSE feloldással)...`);
+    console.log(`⏳ Átállás MusicGen tartalék motorokra...`);
 
-    const host = "facebook-musicgen.hf.space";
-    const sessionHash = Math.random().toString(36).substring(2, 13);
+    // 1. STRATÉGIA: Közvetlen Hugging Face Inference REST API (ha van HF Token)
+    if (token) {
+        try {
+            console.log(`🎵 Próbálkozás közvetlen HF Inference API-val (facebook/musicgen-small)...`);
+            const hfRes = await fetch("https://api-inference.huggingface.co/models/facebook/musicgen-small", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({ inputs: prompt })
+            });
 
-    const payload = {
-        data: [
-            "musicgen-small",
-            prompt,
-            null,
-            audioDuration,
-            250,
-            0,
-            1.0,
-            3.0
-        ],
-        event_data: null,
-        fn_index: 0,
-        session_hash: sessionHash
-    };
+            if (hfRes.ok) {
+                const buffer = Buffer.from(await hfRes.arrayBuffer());
+                if (buffer.length > 2000) {
+                    console.log(`✅ Sikeres HF Inference API generálás! Méret: ${buffer.length} bájt`);
+                    return buffer;
+                }
+            } else {
+                console.warn(`⚠️ HF Inference API válasz: ${hfRes.status}`);
+            }
+        } catch (hfErr) {
+            console.warn(`⚠️ HF Inference API hiba:`, hfErr.message);
+        }
+    }
 
-    try {
-        // 1. LÉPÉS: Belépés a várakozási sorba
-        console.log(`🎵 Belépés a sorba (Session ID: ${sessionHash})...`);
-        
-        let joinRes = await fetch(`https://${host}/gradio_api/queue/join`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-            },
-            body: JSON.stringify(payload)
-        });
+    // 2. STRATÉGIA: Alternatív Gradio Space-ek próbája
+    const hosts = [
+        "facebook-musicgen.hf.space",
+        "fffiloni-musicgen-small.hf.space",
+        "mrfakename-musicgen-song-generator.hf.space"
+    ];
 
-        if (!joinRes.ok) {
-            joinRes = await fetch(`https://${host}/queue/join`, {
+    for (const host of hosts) {
+        const sessionHash = Math.random().toString(36).substring(2, 13);
+        const payload = {
+            data: [
+                "musicgen-small",
+                prompt,
+                null,
+                audioDuration,
+                250,
+                0,
+                1.0,
+                3.0
+            ],
+            event_data: null,
+            fn_index: 0,
+            session_hash: sessionHash
+        };
+
+        try {
+            console.log(`🎵 Csatlakozás a várakozási sorhoz [${host}] (Session ID: ${sessionHash})...`);
+            
+            let joinRes = await fetch(`https://${host}/gradio_api/queue/join`, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -64,119 +87,102 @@ async function fetchFallbackAudio(prompt, duration, token) {
                 },
                 body: JSON.stringify(payload)
             });
-        }
 
-        if (!joinRes.ok) {
-            const errText = await joinRes.text();
-            throw new Error(`Sorba lépés hiba (${joinRes.status}): ${errText.substring(0, 100)}`);
-        }
+            if (!joinRes.ok) {
+                joinRes = await fetch(`https://${host}/queue/join`, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+                    },
+                    body: JSON.stringify(payload)
+                });
+            }
 
-        // 2. LÉPÉS: Várakozás és SSE adatfolyam letöltése
-        console.log(`⏳ Várakozás a generálásra a sorban...`);
-        
-        let streamRes = await fetch(`https://${host}/gradio_api/queue/data?session_hash=${sessionHash}`, {
-            headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
-        });
+            if (!joinRes.ok) {
+                console.warn(`⚠️ [${host}] nem érhető el (${joinRes.status})`);
+                continue;
+            }
 
-        if (!streamRes.ok) {
-            streamRes = await fetch(`https://${host}/queue/data?session_hash=${sessionHash}`, {
+            console.log(`⏳ Várakozás a generálásra a sorban [${host}]...`);
+            
+            let streamRes = await fetch(`https://${host}/gradio_api/queue/data?session_hash=${sessionHash}`, {
                 headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
             });
-        }
 
-        const streamText = await streamRes.text();
-        let fileUrl = null;
+            if (!streamRes.ok) {
+                streamRes = await fetch(`https://${host}/queue/data?session_hash=${sessionHash}`, {
+                    headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
+                });
+            }
 
-        // Rekurzív objektum-bejáró a tetszőleges mélységben lévő audió hivatkozásokhoz
-        function extractAudioUrl(obj) {
-            if (!obj) return null;
-            if (typeof obj === 'string') {
-                if (obj.includes('.wav') || obj.includes('.mp3') || obj.includes('/file=') || obj.includes('/tmp/') || obj.startsWith('http')) {
-                    return obj;
+            if (!streamRes.ok) continue;
+
+            const streamText = await streamRes.text();
+            let fileUrl = null;
+
+            // SSE Adatok elemzése
+            const lines = streamText.split("\n");
+            for (const line of lines) {
+                if (line.startsWith("data:")) {
+                    try {
+                        const parsed = JSON.parse(line.slice(5).trim());
+
+                        // 🔴 SZERVER OLDALI HIBA DETEKTÁLÁSA
+                        if (parsed.output?.error) {
+                            console.warn(`❌ Szerver oldali GPU/Space hiba [${host}]:`, parsed.output.error);
+                            fileUrl = null;
+                            break;
+                        }
+
+                        // Sikeres kimenet kiemelése
+                        const dataArray = parsed.output?.data || parsed.data;
+                        if (Array.isArray(dataArray) && dataArray[0]) {
+                            const item = dataArray[0];
+                            fileUrl = typeof item === "object" ? (item.url || item.path || item.name) : item;
+                            if (fileUrl) break;
+                        }
+                    } catch (e) {}
                 }
-                return null;
             }
-            if (Array.isArray(obj)) {
-                for (const item of obj) {
-                    const res = extractAudioUrl(item);
-                    if (res) return res;
-                }
-            } else if (typeof obj === 'object') {
-                if (obj.url) return extractAudioUrl(obj.url);
-                if (obj.path) return extractAudioUrl(obj.path);
-                if (obj.name) return extractAudioUrl(obj.name);
-                for (const k of Object.keys(obj)) {
-                    if (k === 'event_data') continue;
-                    const res = extractAudioUrl(obj[k]);
-                    if (res) return res;
+
+            // Ha nem találtunk URL-t a JSON-ben, regex keresés
+            if (!fileUrl && !streamText.includes('"error"')) {
+                const match = streamText.match(/"(https?:\/\/[^"]+\.(?:wav|mp3|flac|ogg)[^"]*)"/i) ||
+                              streamText.match(/("(?:\/file=|\/tmp\/)[^"]+\.(?:wav|mp3|flac|ogg)[^"]*")/i);
+                if (match && match[1]) {
+                    fileUrl = match[1].replace(/^"/, '').replace(/"$/, '');
                 }
             }
-            return null;
-        }
 
-        // A) Végigmegyünk az SSE stream összes "data:" során
-        const lines = streamText.split("\n");
-        for (const line of lines) {
-            if (line.startsWith("data:")) {
-                try {
-                    const parsed = JSON.parse(line.slice(5).trim());
-                    const found = extractAudioUrl(parsed);
-                    if (found) {
-                        fileUrl = found;
-                        break;
-                    }
-                } catch (e) {}
+            if (!fileUrl) {
+                console.warn(`⚠️ [${host}] nem adott vissza érvényes audió hivatkozást, próbálkozás a következővel...`);
+                continue;
             }
-        }
 
-        // B) Regex tartalék kereső, ha a JSON struktúrából kimaradt volna a minta
-        if (!fileUrl) {
-            const match = streamText.match(/"(https?:\/\/[^"]+\.(?:wav|mp3|flac|ogg)[^"]*)"/i) ||
-                          streamText.match(/("(?:\/file=|\/tmp\/)[^"]+\.(?:wav|mp3|flac|ogg)[^"]*")/i) ||
-                          streamText.match(/("(?:\/file=|\/tmp\/)[^"]+")/i);
-            if (match && match[1]) {
-                fileUrl = match[1].replace(/^"/, '').replace(/"$/, '');
+            // Letöltési útvonalak felépítése
+            let downloadUrl = fileUrl;
+            if (!downloadUrl.startsWith("http")) {
+                const cleanPath = downloadUrl.startsWith('/') ? downloadUrl : '/' + downloadUrl;
+                downloadUrl = `https://${host}/gradio_api/file=${cleanPath}`;
             }
-        }
 
-        if (!fileUrl) {
-            console.error("📋 SSE Válaszvááz (Debug):", streamText.substring(0, 300));
-            throw new Error("A generálás lefutott, de nem sikerült kiszűrni a hangfájl URL-jét.");
-        }
-
-        // 3. LÉPÉS: A fájl letöltése a lehetséges útvonalakról
-        const possibleDownloadUrls = [];
-        if (fileUrl.startsWith("http")) {
-            possibleDownloadUrls.push(fileUrl);
-        } else {
-            const clean = fileUrl.replace(/^\/file=/, '').replace(/^\//, '');
-            possibleDownloadUrls.push(`https://${host}/gradio_api/file=/${clean}`);
-            possibleDownloadUrls.push(`https://${host}/file=/${clean}`);
-        }
-
-        console.log(`🎧 Hangfájl azonosítva (${fileUrl}), letöltés kísérlete...`);
-
-        for (const downloadUrl of possibleDownloadUrls) {
-            try {
-                const audioRes = await fetch(downloadUrl);
-                if (audioRes.ok) {
-                    const buffer = Buffer.from(await audioRes.arrayBuffer());
-                    if (buffer.length > 2000) {
-                        console.log(`✅ Sikeres MusicGen letöltés! Méret: ${buffer.length} bájt`);
-                        return buffer;
-                    }
+            console.log(`🎧 Letöltés [${host}]: ${downloadUrl}`);
+            const audioRes = await fetch(downloadUrl);
+            if (audioRes.ok) {
+                const buffer = Buffer.from(await audioRes.arrayBuffer());
+                if (buffer.length > 2000) {
+                    console.log(`✅ Sikeres generálás a(z) [${host}] Space-ről! Méret: ${buffer.length} bájt`);
+                    return buffer;
                 }
-            } catch (dlErr) {
-                // Próbáljuk a következő elérési utat
             }
+
+        } catch (err) {
+            console.warn(`⚠️ Hiba a(z) [${host}] hívásakor:`, err.message);
         }
-
-        throw new Error("Egyetlen letöltési útvonalról sem sikerült letölteni a kész audiót.");
-
-    } catch (err) {
-        console.warn(`⚠️ MusicGen Queue hiba:`, err.message);
-        throw new Error(`A tartalék Queue API hívása nem sikerült: ${err.message}`);
     }
+
+    throw new Error("Egyetlen tartalék MusicGen API sem tudta előállítani a hangfájlt.");
 }
 
 // ==========================================
