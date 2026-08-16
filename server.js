@@ -10,6 +10,28 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "5mb" }));
 
+// Segédfunkció: Hugging Face Direct Inference API tartalék audióhoz
+async function fetchHfInferenceAudio(prompt, token) {
+    const response = await fetch(
+        "https://api-inference.huggingface.co/models/facebook/musicgen-small",
+        {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ inputs: prompt }),
+        }
+    );
+
+    if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`HF Inference API hiba (${response.status}): ${errText}`);
+    }
+
+    const arrayBuf = await response.arrayBuffer();
+    return Buffer.from(arrayBuf);
+}
 // ==========================================
 // 1. ACE-STEP FREE AUDIO GENERÁLÁS (@gradio/client)
 // ≈=====≈======≈============================
@@ -65,27 +87,27 @@ app.post("/api/generate-free-audio", async (req, res) => {
 
             // 2. Hiba (pl. ZeroGPU keret) esetén azonnal elindul a Pollinations tartalék
             try {
-                const pollUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(finalPrompt)}?model=audio&seed=${Math.floor(Math.random() * 1000)}`;
-                const pollFetch = await fetch(pollUrl);
-
-                if (!pollFetch.ok) throw new Error("A Pollinations tartalék sem érhető el.");
-
-                const arrayBuf = await pollFetch.arrayBuffer();
-                const audioBuffer = Buffer.from(arrayBuf);
-
-                console.log(`🎧 Pollinations siker! Méret: ${audioBuffer.length} bájt`);
-
-                res.setHeader("Content-Type", "audio/mpeg");
+                 // 2. Tartalék: HF Direct Inference (MusicGen-Small)
+                audioBuffer = await fetchHfInferenceAudio(finalPrompt, hfToken);
+                console.log(`🎧 HF Serverless tartalék siker! Méret: ${audioBuffer.length} bájt`);
+            } catch (fallbackError) {
+                console.error("❌ Tartalék API hiba:", fallbackError.message);
+                return res.status(500).json({
+                    success: false,
+                    error: "A Hugging Face Space és a tartalék API is sikertelen volt."
+                });
+            }
+                res.setHeader("Content-Type", "audio/wav");
                 res.setHeader("Content-Length", audioBuffer.length);
                 return res.status(200).send(audioBuffer);
 
-            } catch (fallbackError) {
-                console.error("❌ Pollinations hiba:", fallbackError.message);
-                return res.status(500).json({
-                    success: false,
-                    error: "A Hugging Face és a Pollinations tartalék is sikertelen volt."
-                });
-            }
+            } catch (error) {
+        console.error("❌ SERVER EXCEPTION:", error);
+        return res.status(500).json({ 
+            success: false, 
+            error: `Szerver hiba: ${error.message || "Ismeretlen hiba történt."}` 
+        });
+    }
         }
 
         console.log("✅ Generálás kész, válasz feldolgozása...");
