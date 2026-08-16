@@ -12,10 +12,12 @@ app.use(express.json({ limit: "5mb" }));
 
 // Segédfunkció: Intelligens argumentumszámlálóval ellátott MusicGen tartalék
 // Segédfunkció: HF Serverless Inference API + Biztonsági Gradio tartalék
-// Tisztán REST-alapú tartalék funkció (bypass-olja a Gradio WebSocket/Queue rendszert)
+const https = require('https');
+
+// Segédfunkció: Kényszerített IPv4 HTTPS hívás (Render / Node.js fetch failed javítás)
 async function fetchFallbackAudio(prompt, duration, token) {
     const audioDuration = Math.min(Math.floor(Number(duration) || 5), 10);
-    console.log(`⏳ Átállás HF Serverless REST API-ra...`);
+    console.log(`⏳ Átállás HF Serverless HTTPS API-ra (IPv4 kényszerítéssel)...`);
 
     const models = [
         "facebook/musicgen-small",
@@ -24,57 +26,72 @@ async function fetchFallbackAudio(prompt, duration, token) {
 
     for (const model of models) {
         try {
-            console.log(`🎵 Próbálkozás a(z) ${model} modellel...`);
-            
-            const response = await fetch(
-                `https://api-inference.huggingface.co/models/${model}`,
-                {
-                    method: "POST",
-                    headers: {
-                        "Authorization": `Bearer ${token}`,
-                        "Content-Type": "application/json",
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                        "Accept": "audio/wav, audio/mpeg"
-                    },
-                    body: JSON.stringify({
-                        inputs: prompt,
-                        parameters: {
-                            max_new_tokens: audioDuration * 50 // kb. 50 token/másodperc
-                        }
-                    })
+            console.log(`🎵 Próbálkozás a(z) ${model} modellel (IPv4 HTTPS)...`);
+
+            const postData = JSON.stringify({
+                inputs: prompt,
+                parameters: {
+                    max_new_tokens: audioDuration * 50
                 }
-            );
+            });
 
-            // Ha a modell épp ébred (cold start HTTP 503)
-            if (response.status === 503) {
-                const errData = await response.json().catch(() => ({}));
-                const waitTime = Math.ceil(errData.estimated_time || 10);
-                console.warn(`⏳ A(z) ${model} épp ébred, várakozás ${waitTime}s...`);
-                await new Promise(r => setTimeout(r, Math.min(waitTime * 1000, 12000)));
-                continue;
-            }
+            const buffer = await new Promise((resolve, reject) => {
+                const options = {
+                    hostname: 'api-inference.huggingface.co',
+                    path: `/models/${model}`,
+                    method: 'POST',
+                    family: 4, // 👈 Kényszerített IPv4! Ez szünteti meg a Render 'fetch failed' hibáját.
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json',
+                        'Content-Length': Buffer.byteLength(postData),
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+                    },
+                    timeout: 45000
+                };
 
-            if (!response.ok) {
-                const errorText = await response.text();
-                console.warn(`⚠️ ${model} válaszhíba (${response.status}):`, errorText);
-                continue;
-            }
+                const req = https.request(options, (res) => {
+                    const chunks = [];
 
-            const arrayBuf = await response.arrayBuffer();
-            const buffer = Buffer.from(arrayBuf);
+                    if (res.statusCode === 503) {
+                        return reject(new Error("503_COLD_START"));
+                    }
 
-            // Érvényes hangfájl méretellenőrzése (ha nem JSON hiba érkezett)
-            if (buffer.length > 2000) {
-                console.log(`🎧 Serverless REST API siker! (${model}, Méret: ${buffer.length} bájt)`);
+                    if (res.statusCode !== 200) {
+                        return reject(new Error(`HTTP Status ${res.statusCode}`));
+                    }
+
+                    res.on('data', (chunk) => chunks.push(chunk));
+                    res.on('end', () => resolve(Buffer.concat(chunks)));
+                });
+
+                req.on('error', (err) => reject(err));
+                req.on('timeout', () => {
+                    req.destroy();
+                    reject(new Error("HTTPS időtúllépés (45s)"));
+                });
+
+                req.write(postData);
+                req.end();
+            });
+
+            if (buffer && buffer.length > 2000) {
+                console.log(`🎧 Serverless HTTPS API siker! (${model}, Méret: ${buffer.length} bájt)`);
                 return buffer;
             }
         } catch (err) {
-            console.warn(`⚠️ Hálózati hiba a(z) ${model} hívásakor:`, err.message);
+            if (err.message === "503_COLD_START") {
+                console.warn(`⏳ A(z) ${model} épp ébred (503), várakozás 10 másodpercet...`);
+                await new Promise(r => setTimeout(r, 10000));
+            } else {
+                console.warn(`⚠️ Hiba a(z) ${model} hívásakor:`, err.message);
+            }
         }
     }
 
     throw new Error("A tartalék Serverless API-k egyike sem adott vissza érvényes audiót.");
 }
+
 
 // ==========================================
 // 1. ACE-STEP FREE AUDIO GENERÁLÁS (@gradio/client)
