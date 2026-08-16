@@ -12,10 +12,11 @@ app.use(express.json({ limit: "5mb" }));
 
 // Segédfunkció: Intelligens argumentumszámlálóval ellátott MusicGen tartalék
 // Segédfunkció: HF Serverless Inference API + Biztonsági Gradio tartalék
+// Segédfunkció: HF Serverless API + Numerikus fn_index Gradio tartalék
 async function fetchFallbackAudio(prompt, duration, token) {
-    console.log(`⏳ Átállás HF Serverless Inference API-ra (facebook/musicgen-small)...`);
+    console.log(`⏳ Átállás HF Serverless Inference API-ra...`);
 
-    // 1. ELSŐDLEGES TARTALÉK: Direct HF Serverless Inference API (Nincs ZeroGPU, nincs Gradio végpont-keresés)
+    // 1. ELSŐDLEGES TARTALÉK: HF Serverless Inference API (Közvetlen HTTP, nincs Gradio függőség)
     try {
         const response = await fetch(
             "https://api-inference.huggingface.co/models/facebook/musicgen-small",
@@ -32,36 +33,40 @@ async function fetchFallbackAudio(prompt, duration, token) {
         if (response.ok) {
             const arrayBuf = await response.arrayBuffer();
             const buffer = Buffer.from(arrayBuf);
-            if (buffer.length > 1000) { // Ellenőrizzük, hogy valódi hangfájl-e
+            if (buffer.length > 2000) {
                 console.log(`🎧 Serverless API siker! Méret: ${buffer.length} bájt`);
                 return buffer;
             }
         } else {
             const errText = await response.text();
-            console.warn(`⚠️ HF Serverless API válasz hiba (${response.status}):`, errText);
+            console.warn(`⚠️ HF Serverless API hiba (${response.status}):`, errText);
         }
     } catch (apiErr) {
         console.warn("⚠️ HF Serverless API hálózati hiba:", apiErr.message);
     }
 
-    // 2. MÁSODLAGOS TARTALÉK: Szigorúan szűrt Gradio Space hívás
-    console.log("⏳ Próbálkozás Gradio Space-szel (facebook/MusicGen)...");
+    // 2. MÁSODLAGOS TARTALÉK: Gradio Space numerikus fn_index használatával
+    console.log("⏳ Próbálkozás facebook/MusicGen Space numerikus index-szel...");
     try {
         const client = await Client.connect("facebook/MusicGen", { hf_token: token });
         const dependencies = client.config?.dependencies || [];
 
-        // Kizárjuk a 'batched', 'example', 'load' és egyéb nem generáló végpontokat
-        const validDep = dependencies.find(d => 
-            d.api_name && 
-            !d.api_name.includes("batched") && 
-            !d.api_name.includes("example") &&
-            !d.api_name.includes("load")
-        );
+        // Megkeressük az első érvényes funkció számbeli indexét (fn_index)
+        let targetFnIndex = 0;
+        for (let i = 0; i < dependencies.length; i++) {
+            const dep = dependencies[i];
+            const apiName = dep.api_name || "";
+            // Kiszűrjük az irreleváns belső végpontokat
+            if (!apiName.includes("batched") && !apiName.includes("example") && !apiName.includes("load")) {
+                targetFnIndex = i; // Az 'i' a számbeli fn_index
+                break;
+            }
+        }
 
-        const endpointName = validDep?.api_name ? `/${validDep.api_name.replace(/^\//, '')}` : "/predict";
-        console.log(`🎵 Szűrt érvényes végpont: '${endpointName}'`);
+        console.log(`🎵 Választott fn_index (szám): ${targetFnIndex}`);
 
-        const result = await client.predict(endpointName, [
+        // A predict-nek SZÁMOT (number) adunk át string helyett
+        const result = await client.predict(targetFnIndex, [
             "musicgen-small",
             prompt,
             null
@@ -80,10 +85,9 @@ async function fetchFallbackAudio(prompt, duration, token) {
             const base64Data = audioData.split(",")[1];
             return Buffer.from(base64Data, "base64");
         }
-        
+
         throw new Error("Ismeretlen audio formátum a Space válaszában.");
     } catch (gradioErr) {
-        // Részletes hibakiírás, hogy az objektumok se okozzanak [object Object] leállást
         const errorDetails = typeof gradioErr === 'object' ? JSON.stringify(gradioErr) : gradioErr;
         console.error("❌ Gradio Space hiba részletei:", errorDetails);
         throw new Error(`Minden tartalék lehetőség sikertelen volt.`);
