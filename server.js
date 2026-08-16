@@ -32,9 +32,10 @@ async function fetchHfInferenceAudio(prompt, token) {
     const arrayBuf = await response.arrayBuffer();
     return Buffer.from(arrayBuf);
 }
+
 // ==========================================
 // 1. ACE-STEP FREE AUDIO GENERÁLÁS (@gradio/client)
-// ≈=====≈======≈============================
+// ==========================================
 app.post("/api/generate-free-audio", async (req, res) => {
     console.log("=== ACE-STEP FREE AUDIO GENERÁLÁS (@gradio/client) ===");
 
@@ -66,28 +67,56 @@ app.post("/api/generate-free-audio", async (req, res) => {
 
         console.log(`🎵 Csatlakozás a Space-hez... Prompt: "${finalPrompt}" (${audioDuration}s)`);
 
-        const client = await Client.connect("victor/ace-step-jam", {
-            hf_token: hfToken
-        });
-
-        const apiPayload = [
-            finalPrompt,        // 0: Prompt + Dalszöveg
-            audioDuration,      // 1: Hossz másodpercben
-            -1,                 // 2: Seed
-            false               // 3: Thinking
-        ];
-
-        let result;
+        let audioBuffer;
 
         // 1. Megpróbáljuk az ACE-Step Space-t
         try {
-            result = await client.predict(0, apiPayload);
-        } catch (err) {
-            console.warn("⚠️ HF Space / ZeroGPU hiba, azonnali átállás Pollinations-re:", err.message);
+            const client = await Client.connect("victor/ace-step-jam", {
+                hf_token: hfToken
+            });
 
-            // 2. Hiba (pl. ZeroGPU keret) esetén azonnal elindul a Pollinations tartalék
+            const apiPayload = [
+                finalPrompt,        // 0: Prompt + Dalszöveg
+                audioDuration,      // 1: Hossz másodpercben
+                -1,                 // 2: Seed
+                false               // 3: Thinking
+            ];
+
+            const result = await client.predict(0, apiPayload);
+            let audioData = result?.data?.[0];
+
+            if (!audioData) {
+                throw new Error("Nem érkezett audio adat a Space-ből.");
+            }
+
+            if (typeof audioData === "string" && audioData.trim().startsWith("{")) {
+                try { audioData = JSON.parse(audioData); } catch (e) {}
+            }
+
+            if (typeof audioData === "object" && audioData !== null) {
+                audioData = audioData.audio || audioData.url || audioData.path;
+            }
+
+            if (typeof audioData === "string" && audioData.startsWith("data:audio")) {
+                const base64Data = audioData.split(",")[1];
+                audioBuffer = Buffer.from(base64Data, "base64");
+            } else if (typeof audioData === "string" && audioData.startsWith("http")) {
+                const audioFetch = await fetch(audioData);
+                const arrayBuf = await audioFetch.arrayBuffer();
+                audioBuffer = Buffer.from(arrayBuf);
+            } else if (typeof audioData === "string" && audioData.length > 100) {
+                audioBuffer = Buffer.from(audioData, "base64");
+            } else {
+                throw new Error("Ismeretlen audio formátum érkezett.");
+            }
+
+            console.log(`🎧 ACE-Step siker! Méret: ${audioBuffer.length} bájt`);
+
+        } catch (err) {
+            console.warn("⚠️ HF Space / ZeroGPU hiba, átállás HF Serverless tartalékra:", err.message);
+
+            // 2. Tartalék: HF Direct Inference (MusicGen-Small)
             try {
-                 // 2. Tartalék: HF Direct Inference (MusicGen-Small)
                 audioBuffer = await fetchHfInferenceAudio(finalPrompt, hfToken);
                 console.log(`🎧 HF Serverless tartalék siker! Méret: ${audioBuffer.length} bájt`);
             } catch (fallbackError) {
@@ -97,63 +126,87 @@ app.post("/api/generate-free-audio", async (req, res) => {
                     error: "A Hugging Face Space és a tartalék API is sikertelen volt."
                 });
             }
-                res.setHeader("Content-Type", "audio/wav");
-                res.setHeader("Content-Length", audioBuffer.length);
-                return res.status(200).send(audioBuffer);
+        }
 
-            } catch (error) {
+        res.setHeader("Content-Type", "audio/wav");
+        res.setHeader("Content-Length", audioBuffer.length);
+        return res.status(200).send(audioBuffer);
+
+    } catch (error) {
         console.error("❌ SERVER EXCEPTION:", error);
         return res.status(500).json({ 
             success: false, 
             error: `Szerver hiba: ${error.message || "Ismeretlen hiba történt."}` 
         });
     }
+});
+
+// ==========================================
+// 2. FALLBACK MUSICGEN GENERÁLÁS (Gradio / Inference API)
+// ==========================================
+app.post("/api/generate-audio", async (req, res) => {
+    console.log("=== MUSICGEN AUDIO GENERÁLÁS ===");
+
+    try {
+        const { prompt, hfToken, apiKey, duration } = req.body || {};
+        const token = hfToken || apiKey || process.env.HF_TOKEN;
+
+        if (!token) {
+            return res.status(401).json({ success: false, error: "Hiányzó Hugging Face API token." });
         }
 
-        console.log("✅ Generálás kész, válasz feldolgozása...");
+        if (!prompt) {
+            return res.status(400).json({ success: false, error: "Hiányzó prompt." });
+        }
 
-        // 3. Ha a HF Space sikeres volt, kinyerjük az adatot
-        let audioData = result?.data?.[0];
+        const audioDuration = Number(duration) || 10;
+        console.log(`🎶 MusicGen generálás indítása: "${prompt}" (${audioDuration}s)...`);
 
-        if (!audioData) {
-            return res.status(500).json({ 
-                success: false, 
-                error: "A Hugging Face Space lefutott, de nem küldött audio adatot." 
+        let audioBuffer;
+
+        // 1. Csatlakozás a MusicGen Gradio Space-hez
+        try {
+            const client = await Client.connect("facebook/MusicGen", {
+                hf_token: token
             });
-        }
 
-        if (typeof audioData === "string" && audioData.trim().startsWith("{")) {
+            const result = await client.predict(0, [prompt, null, audioDuration]);
+            const audioData = result?.data?.[0];
+
+            if (!audioData) {
+                throw new Error("Nem érkezett adatsor a MusicGen Space-ből.");
+            }
+
+            const audioUrl = typeof audioData === "object" ? (audioData.url || audioData.path) : audioData;
+
+            if (typeof audioUrl === "string" && audioUrl.startsWith("http")) {
+                const audioFetch = await fetch(audioUrl);
+                const arrayBuf = await audioFetch.arrayBuffer();
+                audioBuffer = Buffer.from(arrayBuf);
+            } else if (typeof audioData === "string" && audioData.startsWith("data:audio")) {
+                const base64Data = audioData.split(",")[1];
+                audioBuffer = Buffer.from(base64Data, "base64");
+            } else {
+                throw new Error("Ismeretlen válaszformátum érkezett a MusicGen-től.");
+            }
+
+            console.log(`🎧 MusicGen Space siker! Méret: ${audioBuffer.length} bájt`);
+
+        } catch (error) {
+            console.warn("⚠️ MusicGen Space hiba, átállás HF Serverless tartalékra:", error.message);
+
+            // 2. Tartalék: HF Direct Inference
             try {
-                audioData = JSON.parse(audioData);
-            } catch (e) {
-                console.error("⚠️ Nem sikerült JSON-ként értelmezni az audioData-t:", e);
+                audioBuffer = await fetchHfInferenceAudio(prompt, token);
+                console.log(`🎧 HF Serverless tartalék siker! Méret: ${audioBuffer.length} bájt`);
+            } catch (fallbackError) {
+                return res.status(500).json({ 
+                    success: false, 
+                    error: `MusicGen Space és a tartalék API is leállt: ${fallbackError.message}` 
+                });
             }
         }
 
-        if (typeof audioData === "object" && audioData !== null) {
-            audioData = audioData.audio || audioData.url || audioData.path;
-        }
-
-        let audioBuffer;
-
-        if (typeof audioData === "string" && audioData.startsWith("data:audio")) {
-            const base64Data = audioData.split(",")[1];
-            audioBuffer = Buffer.from(base64Data, "base64");
-        } else if (typeof audioData === "string" && audioData.startsWith("http")) {
-            const audioFetch = await fetch(audioData);
-            const arrayBuf = await audioFetch.arrayBuffer();
-            audioBuffer = Buffer.from(arrayBuf);
-        } else if (typeof audioData === "string" && audioData.length > 100) {
-            audioBuffer = Buffer.from(audioData, "base64");
-        } else {
-            return res.status(500).json({ 
-                success: false, 
-                error: "Ismeretlen audio formátum érkezett." 
-            });
-        }
-
-        console.log(`🎧 Visszaküldés a kliensnek! Méret: ${audioBuffer.length} bájt`);
-        
         res.setHeader("Content-Type", "audio/wav");
         res.setHeader("Content-Length", audioBuffer.length);
         return res.status(200).send(audioBuffer);
@@ -166,90 +219,6 @@ app.post("/api/generate-free-audio", async (req, res) => {
         });
     }
 });
-
-// ==========================================
-// 2. FALLBACK MUSICGEN GENERÁLÁS (HF Inference Router)
-// ==========================================
-app.post("/api/generate-audio", async (req, res) => {
-    const { prompt, hfToken, apiKey, duration} = req.body || {};
-    const token = hfToken || apiKey || process.env.HF_TOKEN;
-
-    if (!prompt) {
-        return res.status(400).json({ success: false, error: "Hiányzó prompt." });
-    }
- // Kliens által küldött hossz feldolgozása (alapértelmezett: 10s)
-    const audioDuration = Number(duration) || 10;
-
-    console.log(`🎶 MusicGen generálás indítása: "${prompt}"...`);
-
-    try {
-        // 1. Csatlakozás a hivatalos MusicGen Gradio Space-hez
-        const client = await Client.connect("facebook/MusicGen", {
-            hf_token: token || undefined
-        });
-
-        // 2. Generálás futtatása egyetlen gyors próbálkozással
-        let result;
-        try {
-            result = await client.predict(0, [prompt, null, audioDuration]);
-        } catch (e) {
-            console.warn("⚠️ MusicGen Space hívás sikertelen, azonnali átállás Pollinations-re...");
-            throw e; // Átdobja a külső catch ágba, ami elindítja a Pollinations-t
-        }
-
-        const audioData = result?.data?.[0];
-        if (!audioData) {
-            throw new Error("Nem érkezett adatsor a MusicGen Space-ből.");
-        }
-
-        // 3. Audio URL vagy Base64 feldolgozása
-        let audioBuffer;
-        const audioUrl = typeof audioData === "object" ? (audioData.url || audioData.path) : audioData;
-
-        if (typeof audioUrl === "string" && audioUrl.startsWith("http")) {
-            const audioFetch = await fetch(audioUrl);
-            const arrayBuf = await audioFetch.arrayBuffer();
-            audioBuffer = Buffer.from(arrayBuf);
-        } else if (typeof audioData === "string" && audioData.startsWith("data:audio")) {
-            const base64Data = audioData.split(",")[1];
-            audioBuffer = Buffer.from(base64Data, "base64");
-        } else {
-            throw new Error("Ismeretlen válaszformátum érkezett a MusicGen-től.");
-        }
-
-        console.log(`🎧 MusicGen siker! Méret: ${audioBuffer.length} bájt`);
-
-        res.setHeader("Content-Type", "audio/wav");
-        res.setHeader("Content-Length", audioBuffer.length);
-        return res.status(200).send(audioBuffer);
-
-    } catch (error) {
-        console.error("⚠️ MusicGen Gradio hiba:", error.message);
-        console.log("🔄 Átállás Pollinations AI ingyenes audió tartalékra...");
-
-        // 4. Fallback: Ha a HF Space leterhelt/hibás, a Pollinations AI generálja le a zenét
-        try {
-            const pollUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?model=audio&seed=${Math.floor(Math.random() * 1000)}`;
-            const pollFetch = await fetch(pollUrl);
-            
-            if (!pollFetch.ok) throw new Error("A Pollinations tartalék sem érhető el.");
-
-            const arrayBuf = await pollFetch.arrayBuffer();
-            const audioBuffer = Buffer.from(arrayBuf);
-
-            res.setHeader("Content-Type", "audio/mpeg");
-            res.setHeader("Content-Length", audioBuffer.length);
-            return res.status(200).send(audioBuffer);
-
-        } catch (fallbackError) {
-            return res.status(500).json({ 
-                success: false, 
-                error: `MusicGen és tartalék hiba: ${error.message}` 
-            });
-        }
-    }
-});
-
 
 // ==========================================
 // 3. SZÖVEG / DALSZÖVEG GENERÁLÁS (Hugging Face LLM)
@@ -267,7 +236,7 @@ app.post("/api/generate-text", async (req, res) => {
         const hfToken = tokenFromClient || apiKey || process.env.HF_TOKEN;
 
         if (!hfToken) {
-            return res.status(400).json({ error: "Hiányzó Hugging Face API kulcs!" });
+            return res.status(401).json({ error: "Hiányzó Hugging Face API kulcs!" });
         }
 
         const response = await fetch("https://router.huggingface.co/v1/chat/completions", {
@@ -319,3 +288,4 @@ const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });
+            
