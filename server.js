@@ -10,9 +10,143 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "5mb" }));
 
+// ==========================================
+// 1. ACE-STEP FREE AUDIO GENERÁLÁS (@gradio/client)
+// ≈=====≈======≈============================
+
+app.post("/api/generate-free-audio", async (req, res) => {
+    console.log("=== ACE-STEP FREE AUDIO GENERÁLÁS (@gradio/client) ===");
+
+    try {
+        const { 
+            prompt, 
+            hfToken: tokenFromClient, 
+            apiKey, 
+            duration,  
+            lyrics     
+        } = req.body || {};
+
+        const hfToken = tokenFromClient || apiKey || process.env.HF_TOKEN;
+
+        if (!hfToken) {
+            return res.status(401).json({ success: false, error: "Hiányzó Hugging Face API token." });
+        }
+
+        if (!prompt) {
+            return res.status(400).json({ success: false, error: "Hiányzó prompt." });
+        }
+
+        const audioDuration = Number(duration) || 7;
+
+        let finalPrompt = prompt;
+        if (lyrics && typeof lyrics === "string" && lyrics.trim() !== "") {
+            finalPrompt = `${prompt}\n\n${lyrics.trim()}`;
+        }
+
+        console.log(`🎵 Csatlakozás a Space-hez... Prompt: "${finalPrompt}" (${audioDuration}s)`);
+
+        // 1. Csatlakozás a Hugging Face Space-hez
+        const client = await Client.connect("victor/ace-step-jam", {
+            hf_token: hfToken
+        });
+
+        const apiPayload = [
+            finalPrompt,        // 0: Prompt + Dalszöveg
+            audioDuration,      // 1: Hossz másodpercben
+            -1,                 // 2: Seed
+            false               // 3: Thinking
+        ];
+
+        let result;
+
+        // 2. Generálás futtatása okos hibakezeléssel
+        try {
+            result = await client.predict(0, apiPayload);
+        } catch (err) {
+            const errMsg = err.message || "";
+            console.error("❌ Gradio hiba történt:", errMsg);
+
+            if (errMsg.includes("ZeroGPU") || errMsg.includes("exceeded your ZeroGPU")) {
+                return res.status(429).json({
+                    success: false,
+                    error: "Kimerült a Hugging Face ZeroGPU napi kereted erre az API tokenre! Használj egy másik HF tokent, vagy próbáld újra később."
+                });
+            }
+
+            try {
+                result = await client.predict("/create", apiPayload);
+            } catch (err2) {
+                return res.status(500).json({
+                    success: false,
+                    error: `Gradio API hiba: ${err2.message || errMsg}`
+                });
+            }
+        }
+
+        console.log("✅ Generálás kész, válasz feldolgozása...");
+
+        // 3. Audio adatok kinyerése (let használata const helyett az átírhatóságért)
+        let audioData = result?.data?.[0];
+
+        if (!audioData) {
+            return res.status(500).json({ 
+                success: false, 
+                error: "A Hugging Face Space lefutott, de nem küldött audio adatot." 
+            });
+        }
+
+        // A) Ha az audioData egy JSON karakterlánc (pl. '{"audio": "data:audio/wav..."}')
+        if (typeof audioData === "string" && audioData.trim().startsWith("{")) {
+            try {
+                audioData = JSON.parse(audioData);
+            } catch (e) {
+                console.error("⚠️ Nem sikerült JSON-ként értelmezni az audioData-t:", e);
+            }
+        }
+
+        // B) Ha objektumról van szó, kinyerjük a megfelelő mezőt
+        if (typeof audioData === "object" && audioData !== null) {
+            audioData = audioData.audio || audioData.url || audioData.path;
+        }
+
+        let audioBuffer;
+
+        // C) Átalakítás pufferre
+        if (typeof audioData === "string" && audioData.startsWith("data:audio")) {
+            const base64Data = audioData.split(",")[1];
+            audioBuffer = Buffer.from(base64Data, "base64");
+        } else if (typeof audioData === "string" && audioData.startsWith("http")) {
+            const audioFetch = await fetch(audioData);
+            const arrayBuf = await audioFetch.arrayBuffer();
+            audioBuffer = Buffer.from(arrayBuf);
+        } else if (typeof audioData === "string" && audioData.length > 100) {
+            audioBuffer = Buffer.from(audioData, "base64");
+        } else {
+            console.error("❌ Ismeretlen audioData struktúra:", audioData);
+            return res.status(500).json({ 
+                success: false, 
+                error: "Ismeretlen audio formátum érkezett." 
+            });
+        }
+
+        console.log(`🎧 Visszaküldés a kliensnek! Méret: ${audioBuffer.length} bájt`);
+        
+        res.setHeader("Content-Type", "audio/wav");
+        res.setHeader("Content-Length", audioBuffer.length);
+
+        return res.status(200).send(audioBuffer);
+
+    } catch (error) {
+        console.error("❌ SERVER EXCEPTION:", error);
+        return res.status(500).json({ 
+            success: false, 
+            error: `Szerver hiba: ${error.message || "Ismeretlen hiba történt."}` 
+        });
+    }
+});
 
 // ==========================================
-// 1. FALLBACK MUSICGEN GENERÁLÁS (HF Inference Router)
+// 2. FALLBACK MUSICGEN GENERÁLÁS (HF Inference Router)
 // ==========================================
 app.post("/api/generate-audio", async (req, res) => {
     console.log("=== GENERATE AUDIO HÍVÁS (MusicGen) ===");
@@ -69,152 +203,6 @@ app.post("/api/generate-audio", async (req, res) => {
         });
     }
 });
-
-// ==========================================
-// 2. ACE-STEP FREE AUDIO GENERÁLÁS (@gradio/client)
-// ≈=====≈===================================
-app.post("/api/generate-free-audio", async (req, res) => {
-    console.log("=== ACE-STEP FREE AUDIO GENERÁLÁS (@gradio/client) ===");
-
-    try {
-        const { 
-            prompt, 
-            hfToken: tokenFromClient, 
-            apiKey, 
-            duration,  
-            lyrics     
-        } = req.body || {};
-
-        const hfToken = tokenFromClient || apiKey || process.env.HF_TOKEN;
-
-        if (!hfToken) {
-            return res.status(401).json({ success: false, error: "Hiányzó Hugging Face API token." });
-        }
-
-        if (!prompt) {
-            return res.status(400).json({ success: false, error: "Hiányzó prompt." });
-        }
-
-        const audioDuration = Number(duration) || 7;
-
-        let finalPrompt = prompt;
-        if (lyrics && typeof lyrics === "string" && lyrics.trim() !== "") {
-            finalPrompt = `${prompt}\n\n${lyrics.trim()}`;
-        }
-
-        console.log(`🎵 Csatlakozás a Space-hez... Prompt: "${finalPrompt}" (${audioDuration}s)`);
-
-        // 1. Csatlakozás a Hugging Face Space-hez
-        const client = await Client.connect("victor/ace-step-jam", {
-            hf_token: hfToken
-        });
-
-        const apiPayload = [
-            finalPrompt,        // 0: Prompt + Dalszöveg
-            audioDuration,      // 1: Hossz másodpercben
-            -1,                 // 2: Seed
-            false               // 3: Thinking
-        ];
-
-        let result;
-
-        // 2. Generálás futtatása okos hibakezeléssel
-        try {
-            result = await client.predict(0, apiPayload);
-        } catch (err) {
-            const errMsg = err.message || "";
-            console.error("❌ Gradio hiba történt:", errMsg);
-
-            // Ha kimerült a ZeroGPU keret, nem próbálkozunk tovább
-            if (errMsg.includes("ZeroGPU") || errMsg.includes("exceeded your ZeroGPU")) {
-                return res.status(429).json({
-                    success: false,
-                    error: "Kimerült a Hugging Face ZeroGPU napi kereted erre az API tokenre! Használj egy másik HF tokent, vagy próbáld újra később."
-                });
-            }
-
-            // Ha nem ZeroGPU hiba volt, megpróbáljuk a '/create' végpontot
-            try {
-                result = await client.predict("/create", apiPayload);
-            } catch (err2) {
-                return res.status(500).json({
-                    success: false,
-                    error: `Gradio API hiba: ${err2.message || errMsg}`
-                });
-            }
-        }
-
-        console.log("✅ Generálás kész, válasz feldolgozása...");
-
-        // 3. Audio adatok kinyerése
-        const audioData = result?.data?.[0];
-//console.log("🔍 audioData nyers tartalma:", JSON.stringify(audioData, null, 2));
-
-if (!audioData) {
-    return res.status(500).json({ 
-        success: false, 
-        error: "A Hugging Face Space lefutott, de nem küldött audio adatot." 
-    });
-}
-
-// 1. Ha az audioData egy JSON karakterlánc (pl. '{"audio": "data:audio/wav..."}')
-if (typeof audioData === "string" && audioData.trim().startsWith("{")) {
-    try {
-        audioData = JSON.parse(audioData);
-    } catch (e) {
-        console.error("⚠️ Nem sikerült JSON-ként értelmezni az audioData-t:", e);
-    }
-}
-
-// 2. Ha objektumról van szó, kinyerjük az audio / url / path mezőt
-if (typeof audioData === "object" && audioData !== null) {
-    audioData = audioData.audio || audioData.url || audioData.path;
-}
-
-let audioBuffer;
-
-try {
-    // A) Base64 Data URL (pl. "data:audio/wav;base64,...")
-    if (typeof audioData === "string" && audioData.startsWith("data:audio")) {
-        const base64Data = audioData.split(",")[1];
-        audioBuffer = Buffer.from(base64Data, "base64");
-    } 
-    // B) HTTP URL
-    else if (typeof audioData === "string" && audioData.startsWith("http")) {
-        const audioFetch = await fetch(audioData);
-        const arrayBuf = await audioFetch.arrayBuffer();
-        audioBuffer = Buffer.from(arrayBuf);
-    } 
-    // C) Tiszta Base64 string
-    else if (typeof audioData === "string" && audioData.length > 100) {
-        audioBuffer = Buffer.from(audioData, "base64");
-    } 
-    else {
-        console.error("❌ Ismeretlen audioData struktúra:", audioData);
-        return res.status(500).json({ 
-            success: false, 
-            error: "Ismeretlen audio formátum érkezett." 
-        });
-    }
-
-        console.log(`🎧 Visszaküldés a kliensnek! Méret: ${audioBuffer.length} bájt`);
-// Beállítjuk a válasz fejléceket, hogy a böngésző audióként értelmezze
-    res.setHeader("Content-Type", "audio/wav"); // Ha MP3 érkezik, írd át 'audio/mpeg'-re
-    res.setHeader("Content-Length", audioBuffer.length);
-
-    // Nyers binary puffer visszaküldése a kliensnek
-    return res.status(200).send(audioBuffer);
-
-
-    } catch (error) {
-        console.error("❌ SERVER EXCEPTION:", error);
-        res.status(500).json({ 
-            success: false, 
-            error: `Szerver hiba: ${error.message || "Ismeretlen hiba történt."}` 
-        });
-    }
-});
-
 
 // ==========================================
 // 3. SZÖVEG / DALSZÖVEG GENERÁLÁS (Hugging Face LLM)
