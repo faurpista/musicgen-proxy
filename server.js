@@ -12,86 +12,68 @@ app.use(express.json({ limit: "5mb" }));
 
 // Segédfunkció: Intelligens argumentumszámlálóval ellátott MusicGen tartalék
 // Segédfunkció: HF Serverless Inference API + Biztonsági Gradio tartalék
-// Segédfunkció: HF Serverless API + Numerikus fn_index Gradio tartalék
+// Tisztán REST-alapú tartalék funkció (bypass-olja a Gradio WebSocket/Queue rendszert)
 async function fetchFallbackAudio(prompt, duration, token) {
-    console.log(`⏳ Átállás HF Serverless Inference API-ra...`);
+    const audioDuration = Math.min(Math.floor(Number(duration) || 5), 10);
+    console.log(`⏳ Átállás HF Serverless REST API-ra...`);
 
-    // 1. ELSŐDLEGES TARTALÉK: HF Serverless Inference API (Közvetlen HTTP, nincs Gradio függőség)
-    try {
-        const response = await fetch(
-            "https://api-inference.huggingface.co/models/facebook/musicgen-small",
-            {
-                headers: {
-                    "Authorization": `Bearer ${token}`,
-                    "Content-Type": "application/json",
-                },
-                method: "POST",
-                body: JSON.stringify({ inputs: prompt }),
+    const models = [
+        "facebook/musicgen-small",
+        "facebook/musicgen-medium"
+    ];
+
+    for (const model of models) {
+        try {
+            console.log(`🎵 Próbálkozás a(z) ${model} modellel...`);
+            
+            const response = await fetch(
+                `https://api-inference.huggingface.co/models/${model}`,
+                {
+                    method: "POST",
+                    headers: {
+                        "Authorization": `Bearer ${token}`,
+                        "Content-Type": "application/json",
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                        "Accept": "audio/wav, audio/mpeg"
+                    },
+                    body: JSON.stringify({
+                        inputs: prompt,
+                        parameters: {
+                            max_new_tokens: audioDuration * 50 // kb. 50 token/másodperc
+                        }
+                    })
+                }
+            );
+
+            // Ha a modell épp ébred (cold start HTTP 503)
+            if (response.status === 503) {
+                const errData = await response.json().catch(() => ({}));
+                const waitTime = Math.ceil(errData.estimated_time || 10);
+                console.warn(`⏳ A(z) ${model} épp ébred, várakozás ${waitTime}s...`);
+                await new Promise(r => setTimeout(r, Math.min(waitTime * 1000, 12000)));
+                continue;
             }
-        );
 
-        if (response.ok) {
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.warn(`⚠️ ${model} válaszhíba (${response.status}):`, errorText);
+                continue;
+            }
+
             const arrayBuf = await response.arrayBuffer();
             const buffer = Buffer.from(arrayBuf);
+
+            // Érvényes hangfájl méretellenőrzése (ha nem JSON hiba érkezett)
             if (buffer.length > 2000) {
-                console.log(`🎧 Serverless API siker! Méret: ${buffer.length} bájt`);
+                console.log(`🎧 Serverless REST API siker! (${model}, Méret: ${buffer.length} bájt)`);
                 return buffer;
             }
-        } else {
-            const errText = await response.text();
-            console.warn(`⚠️ HF Serverless API hiba (${response.status}):`, errText);
+        } catch (err) {
+            console.warn(`⚠️ Hálózati hiba a(z) ${model} hívásakor:`, err.message);
         }
-    } catch (apiErr) {
-        console.warn("⚠️ HF Serverless API hálózati hiba:", apiErr.message);
     }
 
-    // 2. MÁSODLAGOS TARTALÉK: Gradio Space numerikus fn_index használatával
-    console.log("⏳ Próbálkozás facebook/MusicGen Space numerikus index-szel...");
-    try {
-        const client = await Client.connect("facebook/MusicGen", { hf_token: token });
-        const dependencies = client.config?.dependencies || [];
-
-        // Megkeressük az első érvényes funkció számbeli indexét (fn_index)
-        let targetFnIndex = 0;
-        for (let i = 0; i < dependencies.length; i++) {
-            const dep = dependencies[i];
-            const apiName = dep.api_name || "";
-            // Kiszűrjük az irreleváns belső végpontokat
-            if (!apiName.includes("batched") && !apiName.includes("example") && !apiName.includes("load")) {
-                targetFnIndex = i; // Az 'i' a számbeli fn_index
-                break;
-            }
-        }
-
-        console.log(`🎵 Választott fn_index (szám): ${targetFnIndex}`);
-
-        // A predict-nek SZÁMOT (number) adunk át string helyett
-        const result = await client.predict(targetFnIndex, [
-            "musicgen-small",
-            prompt,
-            null
-        ]);
-
-        const audioData = result?.data?.[0];
-        if (!audioData) throw new Error("Nem érkezett audio adat a Space-ből.");
-
-        const audioUrl = typeof audioData === "object" ? (audioData.url || audioData.path) : audioData;
-
-        if (typeof audioUrl === "string" && audioUrl.startsWith("http")) {
-            const res = await fetch(audioUrl);
-            const arrayBuf = await res.arrayBuffer();
-            return Buffer.from(arrayBuf);
-        } else if (typeof audioData === "string" && audioData.startsWith("data:audio")) {
-            const base64Data = audioData.split(",")[1];
-            return Buffer.from(base64Data, "base64");
-        }
-
-        throw new Error("Ismeretlen audio formátum a Space válaszában.");
-    } catch (gradioErr) {
-        const errorDetails = typeof gradioErr === 'object' ? JSON.stringify(gradioErr) : gradioErr;
-        console.error("❌ Gradio Space hiba részletei:", errorDetails);
-        throw new Error(`Minden tartalék lehetőség sikertelen volt.`);
-    }
+    throw new Error("A tartalék Serverless API-k egyike sem adott vissza érvényes audiót.");
 }
 
 // ==========================================
