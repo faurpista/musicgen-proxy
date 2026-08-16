@@ -11,26 +11,51 @@ app.use(cors());
 app.use(express.json({ limit: "5mb" }));
 
 // Segédfunkció: Hugging Face Direct Inference API tartalék audióhoz
+// Segédfunkció: HF Serverless Inference API tartalék audióhoz (Cold-Start és Timeout kezeléssel)
 async function fetchHfInferenceAudio(prompt, token) {
-    const response = await fetch(
-        "https://api-inference.huggingface.co/models/facebook/musicgen-small",
-        {
-            method: "POST",
-            headers: {
-                Authorization: `Bearer ${token}`,
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ inputs: prompt }),
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 90000); // 90 mp türelmi idő cold-startra
+
+    const endpoints = [
+        "https://router.huggingface.co/hf-inference/models/facebook/musicgen-small",
+        "https://api-inference.huggingface.co/models/facebook/musicgen-small"
+    ];
+
+    let lastError;
+
+    try {
+        for (const url of endpoints) {
+            try {
+                console.log(`⏳ Tartalék próbálkozás ezen az URL-en: ${url}`);
+                const response = await fetch(url, {
+                    method: "POST",
+                    headers: {
+                        "Authorization": `Bearer ${token}`,
+                        "Content-Type": "application/json",
+                        "x-wait-for-model": "true", // FONTOS: Megvárja a modell betöltését, ne bontson kapcsolatot
+                        "use_cache": "false"
+                    },
+                    body: JSON.stringify({ inputs: prompt }),
+                    signal: controller.signal
+                });
+
+                if (response.ok) {
+                    const arrayBuf = await response.arrayBuffer();
+                    return Buffer.from(arrayBuf);
+                }
+
+                const errText = await response.text();
+                console.warn(`⚠️ HF Inference (${url}) válasz status ${response.status}: ${errText}`);
+                lastError = new Error(`HF Inference hiba (${response.status}): ${errText}`);
+            } catch (e) {
+                console.warn(`⚠️ HF Inference (${url}) hálózati hiba: ${e.message}`);
+                lastError = e;
+            }
         }
-    );
-
-    if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`HF Inference API hiba (${response.status}): ${errText}`);
+        throw lastError || new Error("Minden HF Inference URL sikertelen volt.");
+    } finally {
+        clearTimeout(timeoutId);
     }
-
-    const arrayBuf = await response.arrayBuffer();
-    return Buffer.from(arrayBuf);
 }
 
 // ==========================================
