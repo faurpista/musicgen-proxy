@@ -15,23 +15,29 @@ const https = require('https');
 
 async function fetchHfInferenceAudio(prompt, duration, token) {
     const audioDuration = Math.floor(Number(duration) || 7);
-    // Ez a helyes API végpont: audio.pollinations.ai
-    const url = `https://audio.pollinations.ai/prompt/${encodeURIComponent(prompt)}?duration=${audioDuration}&seed=${Math.floor(Math.random() * 1000)}`;
+    const url = `https://pollinations.ai/prompt/${encodeURIComponent(prompt)}?model=audio&duration=${audioDuration}&seed=${Math.floor(Math.random() * 1000)}`;
 
     return new Promise((resolve, reject) => {
-        console.log(`⏳ HTTPS kérés a Pollinations API felé: ${url}`);
+        console.log(`⏳ HTTPS kérés a Pollinations fő API felé: ${url}`);
         
-        const req = https.get(url, (res) => {
-            // Ellenőrizzük, hogy a válasz valóban audió-e
+        // A kulcs: 'Accept: audio/wav' fejléc
+        const options = {
+            headers: {
+                'Accept': 'audio/wav',
+                'User-Agent': 'Mozilla/5.0 (Node.js/Server)'
+            }
+        };
+
+        const req = https.get(url, options, (res) => {
             const contentType = res.headers['content-type'] || '';
             
             if (res.statusCode !== 200) {
                 return reject(new Error(`Pollinations API hiba: Status ${res.statusCode}`));
             }
 
-            // Ha HTML jön vissza, az azt jelenti, hogy rossz az URL vagy az API elutasította a kérést
+            // Ha HTML-t kapunk, a szerver nem kezelte az Accept fejlécet
             if (contentType.includes('text/html')) {
-                return reject(new Error("A Pollinations API HTML-t küldött vissza, nem audiót (rossz végpont vagy tiltás)."));
+                return reject(new Error("A Pollinations API weboldalt küldött vissza, nem audiót."));
             }
 
             const chunks = [];
@@ -40,13 +46,13 @@ async function fetchHfInferenceAudio(prompt, duration, token) {
         });
 
         req.on('error', (err) => {
-            console.error("❌ HTTPS kérés hiba (valószínűleg DNS/Firewall):", err.message);
+            console.error("❌ HTTPS hálózati hiba:", err.message);
             reject(err);
         });
 
         req.setTimeout(60000, () => {
             req.destroy();
-            reject(new Error("HTTPS kérés időtúllépés (60s)"));
+            reject(new Error("Időtúllépés"));
         });
     });
 }
